@@ -49,23 +49,47 @@ RUN echo "options(repos = c(CRAN = '${PPM_URL}'))" \
       >> "${R_HOME}/etc/Rprofile.site"
 
 # System dependencies required by the pharmaverse stack.
+# sysreqs.txt lists build-time deps; sysreqs-runtime.txt lists only the shared
+# libraries needed at runtime. We install everything, build packages, then swap
+# to a minimal runtime set in a single layer to avoid bloat.
 COPY env/renv/sysreqs.txt /tmp/sysreqs.txt
-RUN apt-get update && \
-    xargs -a /tmp/sysreqs.txt apt-get install -y --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/* /tmp/sysreqs.txt
+COPY env/renv/sysreqs-runtime.txt /tmp/sysreqs-runtime.txt
 
 # renv itself is pinned; installing it unpinned would undermine the whole point.
 ARG RENV_VERSION=1.0.11
-RUN R -q -e "install.packages('renv', repos='${PPM_URL}'); \
-             if (packageVersion('renv') != '${RENV_VERSION}') \
-               renv::install('renv@${RENV_VERSION}', prompt = FALSE)"
 
 WORKDIR /project
 
 # Copy ONLY the lockfile before restoring, so that editing an analysis script
 # does not invalidate the (expensive) package layer.
 COPY env/renv/renv.lock /project/renv.lock
-RUN R -q -e "renv::restore(lockfile = '/project/renv.lock', clean = TRUE, prompt = FALSE)"
+
+# Single-layer install: system deps → renv → restore → strip build deps.
+# Keeping this in one RUN avoids layer bloat from intermediate files.
+RUN apt-get update && \
+    xargs -a /tmp/sysreqs.txt apt-get install -y --no-install-recommends && \
+    R -q -e "install.packages('renv', repos='${PPM_URL}'); \
+             if (packageVersion('renv') != '${RENV_VERSION}') \
+               renv::install('renv@${RENV_VERSION}', prompt = FALSE)" && \
+    R -q -e "renv::restore(lockfile = '/project/renv.lock', clean = TRUE, prompt = FALSE)" && \
+    # --- Size reduction: remove build-only dev headers and large tools --- \
+    apt-get remove -y --purge \
+      libcurl4-openssl-dev libssl-dev libxml2-dev libfontconfig1-dev \
+      libharfbuzz-dev libfribidi-dev libfreetype6-dev libpng-dev \
+      libtiff5-dev libjpeg-dev libgit2-dev pandoc git && \
+    apt-get autoremove -y --purge && \
+    # Ensure runtime shared libraries are present \
+    xargs -a /tmp/sysreqs-runtime.txt apt-get install -y --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/* /tmp/sysreqs.txt /tmp/sysreqs-runtime.txt && \
+    # --- Size reduction: strip debug symbols from shared libraries --- \
+    find /usr/local/lib/R/ -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true && \
+    # --- Size reduction: remove renv cache (packages already in library) --- \
+    rm -rf ${RENV_PATHS_CACHE} && \
+    # --- Size reduction: remove package docs, examples, and object files --- \
+    find /usr/local/lib/R/site-library/ -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/R/site-library/ -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/R/site-library/ -name "*.o" -delete 2>/dev/null || true && \
+    find /usr/local/lib/R/site-library/ -name "*.a" -delete 2>/dev/null || true
 
 # Project source comes after the package layer.
 COPY analysis/    /project/analysis/

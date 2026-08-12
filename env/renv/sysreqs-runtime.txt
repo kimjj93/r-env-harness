@@ -1,0 +1,10 @@
+libcurl4
+libssl3
+libxml2
+libfontconfig1
+libharfbuzz0b
+libfribidi0
+libfreetype6
+libpng16-16
+libtiff6
+libjpeg-turbo8
