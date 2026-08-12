@@ -1,0 +1,57 @@
+# Search space for the nightly research loop.
+#
+# ONE dimension per candidate. Two simultaneous changes produce a delta nobody
+# can attribute, which defeats the purpose of running the experiment.
+#
+# Keep this list small (3-5 active candidates). The matrix multiplies across two
+# tracks and consumes Actions minutes on every nightly run.
+
+candidates:
+  - id: ppm-2025-04-01
+    track: renv
+    dimension: ppm_snapshot
+    value: "2025-04-01"
+    rationale: >
+      Quarterly CRAN snapshot advance. Tests whether three months of upstream
+      package updates preserve ADSL/ADAE numeric outputs.
+
+  - id: ppm-2025-07-01
+    track: renv
+    dimension: ppm_snapshot
+    value: "2025-07-01"
+    rationale: >
+      Six-month advance. Expected to carry an admiral minor version bump, which
+      is the most likely source of date-imputation drift in ADAE.
+
+  - id: nixpkgs-2025-04-01
+    track: nix
+    dimension: nixpkgs_date
+    value: "2025-04-01"
+    rationale: >
+      Track B counterpart to ppm-2025-04-01. Comparing the two answers whether
+      the tracks agree about the effect of the same calendar advance.
+
+  - id: base-digest-refresh
+    track: renv
+    dimension: base_digest
+    value: "rocker/r-ver:4.4.2"
+    rationale: >
+      Digest pinning means base-image security patches never arrive on their
+      own. This candidate re-resolves the tag and reports whether the digest
+      moved, so the maintenance cost of pinning is visible rather than silent.
+
+# Ranking policy for the weekly proposal. Order matters: a faster build never
+# outweighs a change in results.
+ranking:
+  - result_stability      # layer 4 unchanged beats everything
+  - pq_headroom           # distance between observed deviation and tolerance
+  - low_delta_churn       # fewer moving parts is easier to review
+  - build_time
+
+# A candidate must clear ALL of these to be proposable.
+gates:
+  pq_failed_max: 0
+  forbidden_verdicts:
+    - FAIL_DEVIATION
+    - FAIL_NONDETERMINISM
+  riskmetric_min: 0.5

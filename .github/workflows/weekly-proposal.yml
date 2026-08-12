@@ -1,0 +1,119 @@
+name: weekly-proposal
+
+# The batching mechanism that protects your team's attention.
+#
+# The research loop may run hundreds of experiments a week. This workflow turns
+# all of it into AT MOST ONE pull request. If nothing beat the incumbent it
+# opens nothing at all -- a quiet week is a correct outcome, not a failure.
+#
+# It never merges. It opens a PR and stops.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: weekly-proposal
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+          use-public-rspm: true
+
+      - name: Install aggregation dependencies
+        run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+
+      - name: Collect the week's telemetry
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git fetch origin research/telemetry || true
+          if git rev-parse --verify origin/research/telemetry >/dev/null 2>&1; then
+            git show origin/research/telemetry:evidence/metrics/metrics.jsonl \
+              > artifacts/metrics.jsonl 2>/dev/null || : > artifacts/metrics.jsonl
+          else
+            echo "::notice::No telemetry branch yet -- the research loop has not reported."
+            : > artifacts/metrics.jsonl
+          fi
+          echo "rows: $(wc -l < artifacts/metrics.jsonl)"
+
+      - name: Aggregate and select a candidate
+        run: Rscript harness/research/aggregate.R artifacts/metrics.jsonl harness/research/candidates.yml artifacts
+
+      - name: Decide
+        id: decide
+        run: |
+          set -euo pipefail
+          REC=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json'))['recommendation'])")
+          echo "recommendation=$REC" >> "$GITHUB_OUTPUT"
+          echo "This week: $REC"
+
+      - name: Generate the proposal and apply the pin
+        if: steps.decide.outputs.recommendation == 'PROPOSE'
+        run: Rscript harness/research/propose.R artifacts/recommendation.json .
+
+      - name: Open exactly one pull request
+        if: steps.decide.outputs.recommendation == 'PROPOSE'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ID=$(cat .proposal-id)
+          BRANCH="proposal/$(date -u +%Y-%m-%d)-${ID}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          cp artifacts/weekly-summary.csv evidence/proposals/ 2>/dev/null || true
+          rm -f PROPOSAL.md .proposal-status .proposal-id
+
+          git add -A
+          git commit -m "proposal($ID): weekly environment candidate
+
+Selected by harness/research/aggregate.R from the last 7 days of unattended
+research telemetry. Full justification, metrics and rejected alternatives are
+in evidence/proposals/.
+
+Requires human review and approval before merge (GOVERNANCE.md)."
+
+          git push origin "$BRANCH"
+
+          BODY=$(cat "evidence/proposals/$(date -u +%Y-%m-%d)-${ID}.md")
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "Weekly environment proposal: $ID" \
+            --body "$BODY" \
+            --label "environment-proposal" \
+            --label "needs-human-review"
+
+      - name: Record a quiet week
+        if: steps.decide.outputs.recommendation != 'PROPOSE'
+        run: |
+          REASON=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json')).get('reason','n/a'))")
+          echo "::notice::No proposal opened this week. Reason: $REASON"
+          echo "### No environment proposal this week" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reason: \`$REASON\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The incumbent environment remains the best known configuration." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-aggregation-${{ github.run_id }}
+          path: artifacts/

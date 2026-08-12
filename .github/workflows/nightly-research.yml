@@ -1,0 +1,267 @@
+name: nightly-research
+
+# The autopilot. Explores candidate environment upgrades every night and records
+# what happened.
+#
+# Two properties make this tolerable to run continuously:
+#   1. It NEVER opens a pull request and NEVER targets main. Findings go to the
+#      research/telemetry branch, so hundreds of experiments cost zero review time.
+#   2. Failures are expected and are the point. A candidate that breaks PQ is a
+#      discovery made cheaply at night instead of expensively during a release.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 03:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      candidate_id:
+        description: 'Run a single candidate by id (blank = all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # only to push telemetry to research/telemetry
+
+concurrency:
+  group: nightly-research
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the candidate matrix
+        id: build
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+
+          # Minimal YAML reader for the candidate list: avoids adding a
+          # dependency to a job whose whole purpose is environment control.
+          text = open("harness/research/candidates.yml").read()
+          block = text.split("candidates:", 1)[1].split("\nranking:", 1)[0]
+          items, cur = [], None
+          for line in block.splitlines():
+              s = line.strip()
+              if s.startswith("- id:"):
+                  if cur: items.append(cur)
+                  cur = {"id": s.split("id:", 1)[1].strip()}
+              elif cur is not None and re.match(r"^(track|dimension|value):", s):
+                  k, v = s.split(":", 1)
+                  cur[k.strip()] = v.strip().strip('"')
+          if cur: items.append(cur)
+
+          wanted = os.environ.get("ONLY", "").strip()
+          if wanted:
+              items = [i for i in items if i["id"] == wanted]
+
+          print("matrix=" + json.dumps({"include": items}))
+          PY
+        env:
+          ONLY: ${{ github.event.inputs.candidate_id }}
+
+  research:
+    needs: plan
+    runs-on: ubuntu-latest
+    # A failing candidate is DATA, not an incident. Without this the loop would
+    # stop exploring the moment it found something interesting.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Apply the candidate pin
+        id: apply
+        run: |
+          set -euo pipefail
+          SNAP=$(grep '^PPM_SNAPSHOT=' env/renv/ppm-snapshot.txt | cut -d= -f2)
+          case "${{ matrix.dimension }}" in
+            ppm_snapshot) SNAP="${{ matrix.value }}" ;;
+            base_digest)
+              # Re-resolve the tag to expose whether upstream moved. Pinning by
+              # digest means this is the only way that ever becomes visible.
+              docker buildx imagetools inspect "${{ matrix.value }}" \
+                > /tmp/inspect.txt 2>/dev/null || true
+              NEWD=$(grep -m1 '^Digest:' /tmp/inspect.txt | awk '{print $2}' || echo "")
+              CURD=$(grep '^BASE_DIGEST=' env/renv/ppm-snapshot.txt | cut -d= -f2)
+              echo "current base digest : $CURD"
+              echo "resolved base digest: ${NEWD:-unresolved}"
+              if [ -n "$NEWD" ] && [ "$NEWD" != "$CURD" ]; then
+                echo "::warning::Base image digest moved upstream: $CURD -> $NEWD"
+                echo "digest_moved=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+          esac
+          echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
+
+      - name: Build candidate image
+        id: build
+        if: matrix.track == 'renv'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          START=$(date +%s)
+          docker buildx build \
+            --file env/renv/Dockerfile \
+            --build-arg PPM_SNAPSHOT=${{ steps.apply.outputs.snapshot }} \
+            --tag candidate:${{ matrix.id }} \
+            --load \
+            --cache-from type=gha,scope=research-renv \
+            --cache-to type=gha,mode=max,scope=research-renv \
+            .
+          echo "seconds=$(( $(date +%s) - START ))" >> "$GITHUB_OUTPUT"
+          SIZE=$(docker image inspect candidate:${{ matrix.id }} --format='{{.Size}}')
+          echo "size_mb=$((SIZE / 1024 / 1024))" >> "$GITHUB_OUTPUT"
+
+      - name: Run PQ and delta
+        id: evaluate
+        if: matrix.track == 'renv' && steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts baseline
+          docker run --rm \
+            -e ARTIFACT_DIR=/project/artifacts \
+            -e HARNESS_TRACK=renv \
+            -e PPM_SNAPSHOT=${{ steps.apply.outputs.snapshot }} \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            candidate:${{ matrix.id }} \
+            Rscript /project/validation/run-validation.R || echo "PQ_FAILED=1" >> "$GITHUB_ENV"
+
+          docker run --rm \
+            -e HARNESS_TRACK=renv \
+            -e PPM_SNAPSHOT=${{ steps.apply.outputs.snapshot }} \
+            -v "${{ github.workspace }}/artifacts:/out" \
+            candidate:${{ matrix.id }} \
+            Rscript /project/harness/image_manifest.R /out/manifest.json
+
+          if [ -f evidence/manifests/renv-latest.json ]; then
+            cp evidence/manifests/renv-latest.json baseline/manifest.json
+          fi
+          if [ -f evidence/metrics/pq-renv-latest.json ]; then
+            cp evidence/metrics/pq-renv-latest.json baseline/pq.json
+          fi
+
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            -v "${{ github.workspace }}/baseline:/project/baseline" \
+            candidate:${{ matrix.id }} \
+            Rscript /project/harness/image_delta.R \
+              /project/baseline/manifest.json \
+              /project/artifacts/manifest.json \
+              /project/artifacts \
+              /project/baseline/pq.json \
+              /project/artifacts/pq-summary.json || true
+
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            candidate:${{ matrix.id }} \
+            Rscript /project/harness/riskmetric_scan.R \
+              /project/artifacts/delta.json /project/artifacts || true
+
+      - name: Build Track B closure
+        if: matrix.track == 'nix'
+        continue-on-error: true
+        run: |
+          echo "Track B candidate ${{ matrix.id }} -> nixpkgs ${{ matrix.value }}"
+          echo "::notice::Nix candidate evaluation requires the rstats-on-nix cache; recorded as attempted."
+          mkdir -p artifacts
+
+      - name: Emit metrics row
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          STATUS=success
+          [ "${{ steps.build.outcome }}" = "failure" ] && STATUS=build_failed
+          [ -n "${PQ_FAILED:-}" ] && STATUS=pq_failed
+          [ "${{ matrix.track }}" = "nix" ] && STATUS=unsupported
+
+          if [ -f artifacts/manifest.json ]; then
+            docker run --rm \
+              -e CANDIDATE_ID="${{ matrix.id }}" \
+              -e CANDIDATE_DIMENSION="${{ matrix.dimension }}" \
+              -e HARNESS_TRACK="${{ matrix.track }}" \
+              -e HARNESS_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -e HARNESS_STATUS="$STATUS" \
+              -e GITHUB_SHA="${{ github.sha }}" \
+              -e GITHUB_RUN_ID="${{ github.run_id }}" \
+              -e BUILD_SECONDS="${{ steps.build.outputs.seconds }}" \
+              -e IMAGE_SIZE_MB="${{ steps.build.outputs.size_mb }}" \
+              -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+              candidate:${{ matrix.id }} \
+              Rscript /project/harness/metrics.R /project/artifacts
+          else
+            # Even a total failure produces a row: "this candidate does not
+            # build" is exactly the kind of finding the loop exists to surface.
+            printf '{"timestamp":"%s","candidate_id":"%s","track":"%s","dimension":"%s","status":"%s","verdict":"NOT_EVALUATED"}\n' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ matrix.id }}" \
+              "${{ matrix.track }}" "${{ matrix.dimension }}" "$STATUS" \
+              > artifacts/metrics-row.json
+          fi
+          cat artifacts/metrics-row.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-${{ matrix.id }}-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: ignore
+
+  telemetry:
+    needs: research
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: research-*
+
+      - name: Append rows to the telemetry branch
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Telemetry lives on its own branch and NEVER on main. This is what
+          # keeps the research loop's review cost at exactly zero.
+          git fetch origin research/telemetry || true
+          if git rev-parse --verify origin/research/telemetry >/dev/null 2>&1; then
+            git checkout -B research/telemetry origin/research/telemetry
+          else
+            git checkout --orphan research/telemetry
+            git rm -rf --cached . >/dev/null 2>&1 || true
+            rm -rf $(ls -A | grep -v '^\.git$' | grep -v '^incoming$') 2>/dev/null || true
+            mkdir -p evidence/metrics
+            echo "Telemetry branch for the nightly research loop. Never merged into main." > README.md
+          fi
+
+          mkdir -p evidence/metrics
+          touch evidence/metrics/metrics.jsonl
+          found=0
+          for f in $(find incoming -name 'metrics-row.json' 2>/dev/null); do
+            cat "$f" >> evidence/metrics/metrics.jsonl
+            found=$((found+1))
+          done
+          echo "Appended $found metrics row(s)."
+
+          rm -rf incoming
+          git add -A evidence/metrics/metrics.jsonl README.md
+          git commit -m "chore(research): telemetry for run ${{ github.run_id }}" || {
+            echo "Nothing to record."; exit 0; }
+          git push origin research/telemetry
