@@ -1,0 +1,266 @@
+name: env-validate
+
+# The PR quality gate. Builds each environment track, runs Performance
+# Qualification INSIDE the built image, computes the four-layer delta against
+# the merge base, and posts the result as a sticky PR comment.
+#
+# PRs build images but never push them. Publishing happens only after a human
+# merges (see publish-image.yml), so an unreviewed image can never reach the
+# registry.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ppm_snapshot:
+        type: string
+        required: false
+        default: ""
+      nixpkgs_date:
+        type: string
+        required: false
+        default: ""
+      candidate_id:
+        type: string
+        required: false
+        default: "adhoc"
+      dimension:
+        type: string
+        required: false
+        default: "none"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: env-validate-${{ github.ref }}-${{ inputs.candidate_id || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  track-a:
+    name: Track A (renv + PPM)
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.delta.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # merge-base comparison needs history
+
+      - name: Resolve snapshot pin
+        id: pin
+        run: |
+          set -euo pipefail
+          SNAP="${{ inputs.ppm_snapshot }}"
+          if [ -z "$SNAP" ]; then
+            SNAP=$(grep '^PPM_SNAPSHOT=' env/renv/ppm-snapshot.txt | cut -d= -f2)
+          fi
+          echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
+          echo "Using PPM snapshot: $SNAP"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: env/renv/Dockerfile
+          build-args: |
+            PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }}
+          tags: r-env-harness/renv:${{ github.sha }}
+          push: false
+          load: true
+          # Layer cache keyed so a source-only edit reuses the package layer.
+          cache-from: type=gha,scope=renv
+          cache-to: type=gha,mode=max,scope=renv
+
+      - name: Record build metrics
+        id: buildmeta
+        run: |
+          set -euo pipefail
+          SIZE=$(docker image inspect r-env-harness/renv:${{ github.sha }} \
+                   --format='{{.Size}}')
+          echo "size_mb=$((SIZE / 1024 / 1024))" >> "$GITHUB_OUTPUT"
+
+      - name: Run Performance Qualification inside the image
+        id: pq
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # PQ runs INSIDE the image: the evidence must come from the same bits
+          # that would ship, not from the runner.
+          docker run --rm \
+            -e ARTIFACT_DIR=/project/artifacts \
+            -e PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }} \
+            -e HARNESS_TRACK=renv \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            r-env-harness/renv:${{ github.sha }} \
+            Rscript /project/validation/run-validation.R
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Extract environment manifest
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e HARNESS_TRACK=renv \
+            -e PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }} \
+            -v "${{ github.workspace }}/artifacts:/out" \
+            r-env-harness/renv:${{ github.sha }} \
+            Rscript /project/harness/image_manifest.R /out/manifest.json
+
+      - name: Fetch baseline manifest
+        id: baseline
+        run: |
+          set -euo pipefail
+          mkdir -p baseline
+          # Compare against the MERGE BASE, not whatever main happens to be now.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          else
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          fi
+          echo "Baseline commit: ${BASE_SHA:-none}"
+          if [ -n "$BASE_SHA" ] && \
+             git cat-file -e "$BASE_SHA:evidence/manifests/renv-latest.json" 2>/dev/null; then
+            git show "$BASE_SHA:evidence/manifests/renv-latest.json" > baseline/manifest.json
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No baseline manifest committed yet; this run establishes one."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$BASE_SHA" ] && \
+             git cat-file -e "$BASE_SHA:evidence/metrics/pq-renv-latest.json" 2>/dev/null; then
+            git show "$BASE_SHA:evidence/metrics/pq-renv-latest.json" > baseline/pq.json
+          fi
+
+      - name: Four-layer environment delta
+        id: delta
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            -v "${{ github.workspace }}/baseline:/project/baseline" \
+            -e BASELINE_IMAGE_DIGEST="" \
+            -e CANDIDATE_IMAGE_DIGEST="local-build-${{ github.sha }}" \
+            r-env-harness/renv:${{ github.sha }} \
+            Rscript /project/harness/image_delta.R \
+              /project/baseline/manifest.json \
+              /project/artifacts/manifest.json \
+              /project/artifacts \
+              /project/baseline/pq.json \
+              /project/artifacts/pq-summary.json
+          VERDICT=$(python3 -c "import json;print(json.load(open('artifacts/delta.json'))['verdict'])")
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+
+      - name: Package risk scan
+        continue-on-error: true
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            r-env-harness/renv:${{ github.sha }} \
+            Rscript /project/harness/riskmetric_scan.R \
+              /project/artifacts/delta.json /project/artifacts
+
+      - name: Collect metrics row
+        run: |
+          docker run --rm \
+            -e CANDIDATE_ID="${{ inputs.candidate_id || 'pr' }}" \
+            -e CANDIDATE_DIMENSION="${{ inputs.dimension || 'none' }}" \
+            -e HARNESS_TRACK=renv \
+            -e GITHUB_SHA="${{ github.sha }}" \
+            -e GITHUB_RUN_ID="${{ github.run_id }}" \
+            -e IMAGE_SIZE_MB="${{ steps.buildmeta.outputs.size_mb }}" \
+            -e CANDIDATE_IMAGE_DIGEST="local-build-${{ github.sha }}" \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            r-env-harness/renv:${{ github.sha }} \
+            Rscript /project/harness/metrics.R /project/artifacts
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-renv-${{ github.run_id }}
+          path: artifacts/
+
+      - name: Comment delta on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: env-delta-renv
+          path: artifacts/delta.md
+
+      - name: Enforce the gate
+        run: |
+          set -euo pipefail
+          VERDICT="${{ steps.delta.outputs.verdict }}"
+          echo "PQ step outcome  : ${{ steps.pq.outcome }}"
+          echo "Delta verdict    : $VERDICT"
+          if [ "${{ steps.pq.outcome }}" = "failure" ]; then
+            echo "::error::Performance Qualification failed. Do not widen a tolerance to pass (AGENTS.md 1.6)."
+            exit 1
+          fi
+          case "$VERDICT" in
+            FAIL_DEVIATION|FAIL_NONDETERMINISM)
+              echo "::error::Delta verdict $VERDICT blocks this PR."
+              exit 1 ;;
+          esac
+          echo "Gate passed with verdict: $VERDICT"
+
+  track-b:
+    name: Track B (Nix + rix)
+    runs-on: ubuntu-latest
+    # Track B is informational until proven stable: a Nix closure gap must not
+    # block a legitimate Track A change. Divergence is reported, not hidden.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Use the rstats-on-nix binary cache
+        uses: cachix/cachix-action@v15
+        with:
+          name: rstats-on-nix
+          skipPush: true
+
+      - name: Build the Nix closure
+        id: closure
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd env/nix
+          # ~5% of CRAN is unavailable in nixpkgs; record the gap as a finding
+          # rather than forcing a less reproducible workaround.
+          nix-build default.nix -o result
+
+      - name: Report track status
+        run: |
+          if [ "${{ steps.closure.outcome }}" != "success" ]; then
+            echo "::warning::Track B closure did not build; recorded as unsupported for this change."
+          else
+            echo "Track B closure built successfully."
+          fi
+
+      - name: Run PQ inside the Nix shell
+        if: steps.closure.outcome == 'success'
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts
+          ARTIFACT_DIR=artifacts HARNESS_TRACK=nix \
+            nix-shell env/nix/default.nix --run \
+            "Rscript validation/run-validation.R" || true
+
+      - name: Upload Track B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-nix-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: ignore

@@ -1,0 +1,161 @@
+name: skills-lint
+
+# Validates the governance layer itself.
+#
+# The most important check here is the LAST one: it verifies that the
+# non-negotiable rules in AGENTS.md §1 are still present. Because agents may
+# propose changes to these files (step 4 of the loop), something has to prevent
+# a well-meaning agent from "simplifying" away the rules that keep humans in
+# control. That something is this job.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SKILL.md files have required frontmatter
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in skills/*/SKILL.md; do
+            echo "--- $f"
+            if [ "$(head -1 "$f")" != "---" ]; then
+              echo "::error file=$f::missing YAML frontmatter opening delimiter"; fail=1; continue
+            fi
+            fm=$(awk 'NR>1{if($0=="---") exit; print}' "$f")
+            for key in name description; do
+              if ! grep -q "^$key:" <<<"$fm"; then
+                echo "::error file=$f::frontmatter missing required key '$key'"; fail=1
+              fi
+            done
+            # A description that does not say WHEN to use the skill is not
+            # actionable for an agent choosing between skills.
+            desc=$(grep '^description:' <<<"$fm" | cut -d: -f2- | sed 's/^ *//')
+            if [ "${#desc}" -lt 40 ]; then
+              echo "::error file=$f::description too short to be useful (${#desc} chars)"; fail=1
+            fi
+            if ! grep -qi 'use when\|use whenever' <<<"$desc"; then
+              echo "::error file=$f::description must state when to use the skill"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Required governance files exist
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in AGENTS.md GOVERNANCE.md .github/CODEOWNERS \
+                   .github/copilot-instructions.md CLAUDE.md; do
+            [ -f "$f" ] || { echo "::error::missing required file $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: Vendor pointer files contain no rules of their own
+        run: |
+          set -euo pipefail
+          fail=0
+          # Pointer files must redirect to AGENTS.md. If rules accumulate in
+          # vendor-specific files the contract stops being model-independent,
+          # which is the whole premise of the harness.
+          for f in .github/copilot-instructions.md CLAUDE.md; do
+            grep -q 'AGENTS.md' "$f" || { echo "::error file=$f::must reference AGENTS.md"; fail=1; }
+            lines=$(grep -cve '^\s*$' "$f")
+            if [ "$lines" -gt 15 ]; then
+              echo "::error file=$f::pointer file has $lines lines; rules belong in AGENTS.md"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Generated files are not hand-edited
+        run: |
+          set -euo pipefail
+          fail=0
+          grep -q 'GENERATED FILE' env/nix/default.nix || {
+            echo "::error::env/nix/default.nix lost its generated-file banner"; fail=1; }
+          grep -q 'GENERATED' env/nix/.Rprofile || {
+            echo "::error::env/nix/.Rprofile lost its generated-file banner"; fail=1; }
+          exit $fail
+
+      - name: No floating version pins
+        run: |
+          set -euo pipefail
+          fail=0
+          # A floating tag silently changes the environment underneath you,
+          # which defeats the entire purpose of this repository.
+          if grep -rnE '^FROM [^ ]+:latest' env/ 2>/dev/null; then
+            echo "::error::floating ':latest' base image found"; fail=1
+          fi
+          for df in env/renv/Dockerfile env/nix/Dockerfile.nix; do
+            while read -r line; do
+              case "$line" in
+                *"@sha256:"*) ;;
+                *) echo "::error file=$df::base image not pinned by digest: $line"; fail=1 ;;
+              esac
+            done < <(grep '^FROM ' "$df")
+          done
+          exit $fail
+
+      - name: Non-negotiable rules are intact
+        run: |
+          set -euo pipefail
+          fail=0
+          # Agents may propose changes to AGENTS.md. They may not remove the
+          # rules that keep a human in control. This is the backstop for that.
+          declare -a required=(
+            "Never commit directly to"
+            "Never merge a pull request"
+            "Never approve a pull request"
+            "Never weaken a gate"
+            "Never introduce a floating version"
+          )
+          for rule in "${required[@]}"; do
+            if ! grep -qi "$rule" AGENTS.md; then
+              echo "::error file=AGENTS.md::non-negotiable rule removed or reworded: '$rule'"
+              fail=1
+            fi
+          done
+          # GOVERNANCE.md must keep asserting human-only merge authority.
+          grep -qi 'only.*human\|human.*only' GOVERNANCE.md || {
+            echo "::error file=GOVERNANCE.md::human-only merge authority no longer asserted"; fail=1; }
+          exit $fail
+
+      - name: No workflow may merge or approve
+        run: |
+          set -euo pipefail
+          fail=0
+          # Layer 3 of the enforcement model (GOVERNANCE.md §2), checked
+          # mechanically so it cannot regress unnoticed.
+          #
+          # This file is excluded from the scan because it necessarily contains
+          # the very patterns it searches for.
+          if grep -rn --exclude=skills-lint.yml \
+               -e 'gh pr merge' -e 'pulls/.*/merge' -e 'enable-pull-request-automerge' \
+               .github/workflows/ 2>/dev/null; then
+            echo "::error::a workflow attempts to merge pull requests"; fail=1
+          fi
+          if grep -rnE --exclude=skills-lint.yml \
+               'event:[[:space:]]*.?APPROVE|--approve' \
+               .github/workflows/ 2>/dev/null; then
+            echo "::error::a workflow attempts to APPROVE pull requests"; fail=1
+          fi
+          exit $fail
+
+      - name: R scripts parse
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq r-base-core >/dev/null
+          fail=0
+          while read -r f; do
+            Rscript -e "tryCatch({parse('$f'); cat('ok  $f\n')}, error=function(e){cat('FAIL $f:', conditionMessage(e), '\n'); quit(status=1)})" || fail=1
+          done < <(find harness validation analysis env -name '*.R')
+          exit $fail

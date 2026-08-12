@@ -1,0 +1,5 @@
+{
+  "_comment": "Bridge between the commit a human reviewed and the immutable bits that ran. Written by .github/workflows/publish-image.yml after a merge to main; never hand-edited (AGENTS.md 1.4).",
+  "current": null,
+  "images": {}
+}

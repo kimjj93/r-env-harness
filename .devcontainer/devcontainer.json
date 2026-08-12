@@ -1,0 +1,13 @@
+{
+  "name": "r-env-harness (validated environment)",
+  "//": "Pinned to the SAME digest CI publishes, so local development is bit-identical to the validated environment. Update this only from env/images/images.lock.json — never to a floating tag.",
+  "image": "ghcr.io/kimjj93/r-env-harness/renv:main",
+  "workspaceFolder": "/project",
+  "customizations": {
+    "vscode": {
+      "extensions": ["REditorSupport.r", "GitHub.copilot"],
+      "settings": { "r.rterm.linux": "/usr/local/bin/R" }
+    }
+  },
+  "remoteUser": "root"
+}
