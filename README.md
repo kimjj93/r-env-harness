@@ -213,6 +213,23 @@ To start an agent race:
 gh workflow run agent-race.yml -f task="Advance the PPM snapshot to 2025-04-01"
 ```
 
+### One-time setup: `HARNESS_BOT_TOKEN`
+
+Before the first race, create a PAT and store it as a repository secret:
+
+```bash
+gh secret set HARNESS_BOT_TOKEN   # paste a PAT with repo (or Issues + PRs) scope
+```
+
+This is **required**, not optional. GitHub refuses to assign a coding agent
+using `GITHUB_TOKEN` — `replaceActorsForAssignable` returns `FORBIDDEN` for App
+installation tokens — and `copilot-swe-agent` is not even visible to that token.
+The same secret also makes workflow-opened PRs trigger the validation gate
+automatically. See [`GOVERNANCE.md`](GOVERNANCE.md) for the detail.
+
+Without it the harness still works; you just have to close-and-reopen
+agent-opened PRs by hand, and `agent-race` will refuse to run.
+
 ---
 
 ## Repository map
