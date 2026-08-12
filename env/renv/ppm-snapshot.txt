@@ -6,7 +6,7 @@
 # The codename MUST match the base image. rocker/r-ver:4.4.2 is Ubuntu 24.04
 # (noble). The Dockerfile asserts this at build time.
 
-PPM_SNAPSHOT=2025-01-15
+PPM_SNAPSHOT=2025-04-01
 UBUNTU_CODENAME=noble
 R_VERSION=4.4.2
 BASE_IMAGE=rocker/r-ver:4.4.2
