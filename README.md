@@ -193,6 +193,11 @@ Failing validation is disqualifying, not a scoring penalty.
 
 ## Getting started
 
+> **Running this on a team?** [`docs/OPERATING-MANUAL.md`](docs/OPERATING-MANUAL.md)
+> is the practical companion to this file: what you do each week, how to read a
+> failure, and the failure modes we have already hit.
+
+
 ```bash
 gh repo clone kimjj93/r-env-harness && cd r-env-harness
 
