@@ -150,6 +150,17 @@ jobs:
           fi
           exit $fail
 
+      - name: Workflow YAML parses
+        run: |
+          set -euo pipefail
+          # A workflow that does not parse is a silently disabled gate. Since
+          # agents author workflows here, this must be checked mechanically.
+          fail=0
+          while read -r f; do
+            python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1])); print('ok   '+sys.argv[1])" "$f" || { echo "FAIL $f"; fail=1; }
+          done < <(find .github/workflows -name '*.yml')
+          exit $fail
+
       - name: R scripts parse
         run: |
           set -euo pipefail

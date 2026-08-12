@@ -83,13 +83,10 @@ jobs:
           rm -f PROPOSAL.md .proposal-status .proposal-id
 
           git add -A
-          git commit -m "proposal($ID): weekly environment candidate
-
-Selected by harness/research/aggregate.R from the last 7 days of unattended
-research telemetry. Full justification, metrics and rejected alternatives are
-in evidence/proposals/.
-
-Requires human review and approval before merge (GOVERNANCE.md)."
+          git commit \
+            -m "proposal($ID): weekly environment candidate" \
+            -m "Selected by harness/research/aggregate.R from the last 7 days of unattended research telemetry. Full justification, metrics and rejected alternatives are in evidence/proposals/." \
+            -m "Requires human review and approval before merge (GOVERNANCE.md)."
 
           git push origin "$BRANCH"
 
