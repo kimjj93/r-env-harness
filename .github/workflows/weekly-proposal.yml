@@ -63,11 +63,22 @@ jobs:
           echo "This week: $REC"
 
       - name: Generate the proposal and apply the pin
+        id: propose
         if: steps.decide.outputs.recommendation == 'PROPOSE'
-        run: Rscript harness/research/propose.R artifacts/recommendation.json .
+        run: |
+          set -euo pipefail
+          Rscript harness/research/propose.R artifacts/recommendation.json .
+          # propose.R refuses to emit a pin edit for a candidate that matches
+          # the incumbent, and says so here rather than opening an empty PR.
+          CHANGED=$(python3 -c "import json;print(str(json.load(open('.proposal-status.json'))['changed']).lower())")
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" != "true" ]; then
+            REASON=$(python3 -c "import json;print(json.load(open('.proposal-status.json')).get('reason','n/a'))")
+            echo "::notice::No pull request opened: $REASON"
+          fi
 
       - name: Open exactly one pull request
-        if: steps.decide.outputs.recommendation == 'PROPOSE'
+        if: steps.decide.outputs.recommendation == 'PROPOSE' && steps.propose.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
         run: |
@@ -80,9 +91,16 @@ jobs:
           git checkout -b "$BRANCH"
 
           cp artifacts/weekly-summary.csv evidence/proposals/ 2>/dev/null || true
-          rm -f PROPOSAL.md .proposal-status .proposal-id
+          rm -f PROPOSAL.md .proposal-status .proposal-status.json .proposal-id
 
           git add -A
+          # Belt and braces: even with the check above, never open a pull
+          # request whose diff touches nothing outside evidence/. A proposal
+          # that changes no environment pin is not a proposal.
+          if git diff --cached --quiet -- . ':(exclude)evidence/'; then
+            echo "::error::Proposal branch changes no environment pin. Refusing to open a review-consuming PR."
+            exit 1
+          fi
           git commit \
             -m "proposal($ID): weekly environment candidate" \
             -m "Selected by harness/research/aggregate.R from the last 7 days of unattended research telemetry. Full justification, metrics and rejected alternatives are in evidence/proposals/." \
@@ -99,9 +117,13 @@ jobs:
             --label "needs-human-review"
 
       - name: Record a quiet week
-        if: steps.decide.outputs.recommendation != 'PROPOSE'
+        if: steps.decide.outputs.recommendation != 'PROPOSE' || steps.propose.outputs.changed != 'true'
         run: |
-          REASON=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json')).get('reason','n/a'))")
+          if [ -f .proposal-status.json ]; then
+            REASON=$(python3 -c "import json;print(json.load(open('.proposal-status.json')).get('reason','n/a'))")
+          else
+            REASON=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json')).get('reason','n/a'))")
+          fi
           echo "::notice::No proposal opened this week. Reason: $REASON"
           echo "### No environment proposal this week" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
