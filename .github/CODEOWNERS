@@ -1,0 +1,9 @@
+# Every path requires review from the repository owner.
+# This is one of three layers enforcing human-only merge (see GOVERNANCE.md).
+*                       @kimjj93
+
+# Governance and agent rules: extra emphasis, same owner.
+/AGENTS.md              @kimjj93
+/GOVERNANCE.md          @kimjj93
+/skills/                @kimjj93
+/.github/workflows/     @kimjj93

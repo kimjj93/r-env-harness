@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+renv/library/
+renv/staging/
+result
+result-*
+/artifacts/
+*.html
+!validation/report/*.html
+.DS_Store
