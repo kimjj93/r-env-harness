@@ -43,6 +43,12 @@ ENV OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1
 
+# See env/renv/Dockerfile for the measurements. OpenBLAS picks a kernel from the
+# host CPU at runtime, so an identical Nix closure still produces different last
+# bits on different hardware. Nix hashes the closure, not the processor.
+ARG OPENBLAS_CORETYPE=HASWELL
+ENV OPENBLAS_CORETYPE=${OPENBLAS_CORETYPE}
+
 WORKDIR /project
 COPY env/nix/.Rprofile /project/.Rprofile
 COPY analysis/    /project/analysis/

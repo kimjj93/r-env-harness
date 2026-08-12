@@ -55,6 +55,35 @@ ENV OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1
 
+# Pin the OpenBLAS kernel as well. Thread count was only half the problem.
+#
+# OpenBLAS ships several implementations of each routine and selects one at
+# *runtime* from the CPU it finds. Different kernels use different vector widths
+# and different blocking, so they round differently. GitHub's runner fleet is
+# heterogeneous, so two runs of an identical image digest can land on different
+# kernels and disagree in the last bits -- which is exactly what happened: after
+# pinning threads alone, a fixture set that self-validated at max deviation 0 in
+# one run failed at 1.42e-14 in the next.
+#
+# Measured on one image digest, OPENBLAS_NUM_THREADS=1 throughout, varying only
+# the kernel:
+#
+#   HASWELL      solve_11=3.14491662711728885843e-03
+#   SANDYBRIDGE  solve_11=3.14491662711728929211e-03
+#   NEHALEM      solve_11=3.14491662711728885843e-03
+#
+# HASWELL (AVX2, 2013) is the default because it is both broadly available --
+# including under x86_64 emulation on Apple Silicon, where this was verified --
+# and fast. Override at build time only if you must target older hardware:
+#
+#   docker build --build-arg OPENBLAS_CORETYPE=NEHALEM ...
+#
+# WARNING: forcing a kernel the CPU cannot execute does not fail cleanly. On
+# hardware without the required instructions the process hangs rather than
+# erroring, so this value must be chosen for the *oldest* CPU in your fleet.
+ARG OPENBLAS_CORETYPE=HASWELL
+ENV OPENBLAS_CORETYPE=${OPENBLAS_CORETYPE}
+
 # Fail loudly if the declared codename does not match the base image. Without
 # this the mismatch is invisible: the build still succeeds, but against packages
 # compiled for a different OS -- which is precisely the class of silent drift
