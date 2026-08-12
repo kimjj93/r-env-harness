@@ -19,7 +19,7 @@ years later.
 
 ```
 analysis result
-  └─ produced by → image digest        (env/images/images.lock.json)
+  └─ produced by → image digest        (evidence/images ledger)
        └─ built from → commit SHA      (git)
             └─ pins → lockfile         (renv.lock / default.nix)
                  └─ resolves to → package versions  (evidence/manifests/)
@@ -36,7 +36,7 @@ only in someone's memory or in a chat log.
 
 | Artifact | Location | Answers |
 |---|---|---|
-| Image digest | `env/images/images.lock.json` | which bits ran |
+| Image digest | `evidence/images` ledger branch (`images.lock.json`) | which bits ran |
 | Signature + SBOM | GHCR attestation | provenance and contents |
 | Lockfile | `env/renv/renv.lock`, `env/nix/default.nix` | what was requested |
 | Environment manifest | `evidence/manifests/<sha>.json` | what was actually installed |
@@ -50,9 +50,14 @@ only in someone's memory or in a chat log.
 ## Answering "what produced this number"
 
 1. Find the commit that generated the result.
-2. Look up its digest in `env/images/images.lock.json`.
+2. Look up its digest in the ledger:
+   `git show evidence/images:images.lock.json`.
+   The `images` object is keyed by commit SHA. The copy of `images.lock.json` on
+   `main` is *not* the same thing — it records the currently **approved**
+   environment, not every build, and it moves only through a reviewed PR.
 3. Pull that digest — it is immutable, so it is the same image.
-4. Read `evidence/manifests/<sha>.json` for the full package/OS manifest.
+4. Read `git show evidence/images:manifests/renv-<sha>.json` for the full
+   package/OS manifest.
 5. Read the PQ report for that commit for qualification status.
 6. Read the delta report to see how it differed from its predecessor.
 7. Read the PR to see who approved it and what evidence they saw.

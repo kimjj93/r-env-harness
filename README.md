@@ -120,8 +120,14 @@ The lockfile says what *should* be installed; the image is what *actually ran*.
   rocker 4.4.2" insufficient as submission evidence.
 - Images are published to GHCR **only after a human merge**, tagged by commit
   SHA, never `latest`.
-- The resulting digest is committed back to `env/images/images.lock.json` —
-  the bridge between *the code a human reviewed* and *the bits that ran*.
+- The resulting digest is appended to an **append-only ledger branch**,
+  `evidence/images` — the bridge between *the code a human reviewed* and *the
+  bits that ran*. It is not committed to `main`, for two reasons: pushing to
+  `main` would violate the repository's own first rule (the ruleset blocks it,
+  as it should), and opening a PR for it would loop forever — merging the PR
+  publishes an image, which locks a digest, which opens a PR. The copy of
+  `images.lock.json` on `main` therefore records the *approved* environment and
+  moves only through review; the ledger records every build.
 - Images are cosign-signed (keyless) with an SBOM and build provenance.
 - **Validation runs inside the image**, not beside it. Evidence produced by a
   runner that merely has similar packages installed is not evidence.
@@ -217,7 +223,7 @@ GOVERNANCE.md          who may merge, and what AI may never do
 skills/                vendor-neutral capability specs (SKILL.md)
 env/renv/              Track A: lockfile, digest-pinned Dockerfile, PPM pin
 env/nix/               Track B: rix generator, default.nix, Nix image
-env/images/            images.lock.json — commit ↔ digest bridge
+env/images/            images.lock.json — the APPROVED pin (ledger: evidence/images)
 analysis/              the ADaM payload (ADSL, ADAE)
 validation/            three-phase PQ framework, fixtures, testcases
 harness/               delta engine, manifests, metrics, scoreboard
