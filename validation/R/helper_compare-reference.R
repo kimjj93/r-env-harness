@@ -87,7 +87,14 @@ numeric_backend_meta <- function() {
     # and the last bits of the answer -- depend on the thread count. Two runs of
     # the same image on differently-sized machines are genuinely different
     # numerical environments, and nothing else recorded here would reveal it.
-    blas_threads = blas_thread_count()
+    blas_threads = blas_thread_count(),
+    # Which kernel OpenBLAS selected. Unpinned, this is chosen from the host CPU
+    # at runtime and differs across a heterogeneous runner fleet while every
+    # other recorded field stays identical.
+    blas_coretype = {
+      v <- Sys.getenv("OPENBLAS_CORETYPE", "")
+      if (nzchar(v)) v else "unpinned"
+    }
   )
 }
 
@@ -120,7 +127,7 @@ helper_reference_env_matches <- function(meta, critical_packages = character(0))
   # claim: absence of evidence is not evidence of a match.
   if (is.null(meta$backend)) return(FALSE)
   live_backend <- numeric_backend_meta()
-  for (k in c("platform", "arch", "blas", "lapack", "blas_threads")) {
+  for (k in c("platform", "arch", "blas", "lapack", "blas_threads", "blas_coretype")) {
     # A fixture predating this dimension has no value for it. Treating a missing
     # value as a match would let the exact path be claimed on evidence that was
     # never collected, so it is a mismatch.
@@ -158,7 +165,8 @@ helper_env_mismatch_reasons <- function(meta, critical_packages = character(0)) 
     live_backend <- numeric_backend_meta()
     labels <- c(platform = "platform", arch = "CPU arch",
                 blas = "BLAS", lapack = "LAPACK",
-                blas_threads = "BLAS thread count")
+                blas_threads = "BLAS thread count",
+                blas_coretype = "BLAS kernel")
     for (k in names(labels)) {
       fx <- as.character(meta$backend[[k]])
       lv <- as.character(live_backend[[k]])
