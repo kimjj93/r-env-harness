@@ -82,8 +82,28 @@ numeric_backend_meta <- function() {
     platform = tryCatch(R.version$platform, error = function(e) NA_character_),
     arch     = tryCatch(R.version$arch,     error = function(e) NA_character_),
     blas     = norm(si$BLAS),
-    lapack   = norm(si$LAPACK)
+    lapack   = norm(si$LAPACK),
+    # Threaded BLAS sums partial results per thread, so the reduction order --
+    # and the last bits of the answer -- depend on the thread count. Two runs of
+    # the same image on differently-sized machines are genuinely different
+    # numerical environments, and nothing else recorded here would reveal it.
+    blas_threads = blas_thread_count()
   )
+}
+
+#' How many threads will BLAS use?
+#'
+#' Returns the pinned value when one is set, otherwise "unpinned:<n>" where n is
+#' the core count the library would default to. The two are deliberately not
+#' interchangeable: "1" means someone chose 1, while "unpinned:1" means a
+#' single-core machine happened to produce 1 and a larger machine will not.
+blas_thread_count <- function() {
+  for (v in c("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")) {
+    val <- Sys.getenv(v, "")
+    if (nzchar(val)) return(as.character(val))
+  }
+  n <- tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+  paste0("unpinned:", if (is.na(n)) "unknown" else n)
 }
 
 #' Does the live environment match the one that produced the fixture?
@@ -100,7 +120,11 @@ helper_reference_env_matches <- function(meta, critical_packages = character(0))
   # claim: absence of evidence is not evidence of a match.
   if (is.null(meta$backend)) return(FALSE)
   live_backend <- numeric_backend_meta()
-  for (k in c("platform", "arch", "blas", "lapack")) {
+  for (k in c("platform", "arch", "blas", "lapack", "blas_threads")) {
+    # A fixture predating this dimension has no value for it. Treating a missing
+    # value as a match would let the exact path be claimed on evidence that was
+    # never collected, so it is a mismatch.
+    if (is.null(meta$backend[[k]])) return(FALSE)
     if (!identical(as.character(meta$backend[[k]]),
                    as.character(live_backend[[k]]))) {
       return(FALSE)
@@ -133,7 +157,8 @@ helper_env_mismatch_reasons <- function(meta, critical_packages = character(0)) 
   } else {
     live_backend <- numeric_backend_meta()
     labels <- c(platform = "platform", arch = "CPU arch",
-                blas = "BLAS", lapack = "LAPACK")
+                blas = "BLAS", lapack = "LAPACK",
+                blas_threads = "BLAS thread count")
     for (k in names(labels)) {
       fx <- as.character(meta$backend[[k]])
       lv <- as.character(live_backend[[k]])

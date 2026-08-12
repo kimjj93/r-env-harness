@@ -36,6 +36,13 @@ COPY --from=builder /build/result /build/result
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
+# Pin BLAS threading for the same reason as Track A: threaded BLAS makes the
+# last bits of a linear-algebra result depend on the host's core count, which no
+# pin in default.nix captures. Nix hashes the closure, not the machine.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
+
 WORKDIR /project
 COPY env/nix/.Rprofile /project/.Rprofile
 COPY analysis/    /project/analysis/
