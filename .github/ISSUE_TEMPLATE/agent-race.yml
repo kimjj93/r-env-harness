@@ -1,0 +1,50 @@
+name: Agent race
+description: Have several competing agents attempt the same task independently
+title: "[race] "
+labels: ["agent-race"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding the `agent-race` label to this issue triggers `agent-race.yml`,
+        which creates one sibling issue per available agent — each with a
+        different strategy brief — and assigns them.
+
+        Use a race when there is a **genuine trade-off** to expose (churn vs.
+        currency, speed vs. stability). For a task with one obvious correct
+        answer, a race just costs three times the runner minutes.
+
+  - type: textarea
+    id: task
+    attributes:
+      label: The task
+      description: Identical for every racer. Be specific about the goal, not the method.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoff
+    attributes:
+      label: What trade-off should the race expose?
+      placeholder: "Newer packages vs. smaller review surface"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: racers
+    attributes:
+      label: Racers
+      options:
+        - label: "copilot — brief: minimise version churn"
+        - label: "anthropic — brief: prefer newest packages that still pass PQ"
+        - label: "openai — brief: optimise build time and image size"
+
+  - type: markdown
+    attributes:
+      value: |
+        `harness/scoreboard.R` ranks the resulting PRs on CI artifacts only —
+        never on what the PR descriptions claim. Failing validation is
+        disqualifying, not a scoring penalty.
+
+        **You still merge the winner yourself.** The scoreboard ranks; it does
+        not decide.

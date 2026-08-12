@@ -1,0 +1,72 @@
+name: Environment change request
+description: Ask the harness to evaluate a change to a pinned environment
+title: "[env] "
+labels: ["environment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a change to a pinned environment: a new snapshot date, an
+        R version bump, a package addition, or a base image refresh.
+
+        Change **one dimension at a time**. Two simultaneous changes produce a
+        delta nobody can attribute, which defeats the point of measuring it.
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Track
+      options:
+        - "Track A — renv + PPM snapshot"
+        - "Track B — Nix / rix"
+        - "Both"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dimension
+    attributes:
+      label: Which dimension changes
+      options:
+        - ppm_snapshot
+        - nixpkgs_date
+        - r_version
+        - base_digest
+        - package_addition
+    validations:
+      required: true
+
+  - type: input
+    id: value
+    attributes:
+      label: Target value
+      placeholder: "2025-04-01"
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why is this change wanted?
+      description: What does it unlock, fix, or de-risk?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expectation
+    attributes:
+      label: What do you expect it to do to the results?
+      description: >
+        Stating this before the run makes a surprise visible. "I expected no
+        change and the numbers moved" is a far more useful finding than reading
+        a delta with no prior expectation.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: I understand an agent will open a PR and a human must approve it before anything merges
+          required: true
