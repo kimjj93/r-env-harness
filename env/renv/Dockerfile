@@ -8,7 +8,7 @@
 
 # rocker/r-ver:4.4.2 resolved 2026-08-12. A tag can be re-pushed underneath you;
 # a digest cannot. This is what makes "we used rocker 4.4.2" into evidence.
-FROM rocker/r-ver:4.4.2@sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
+FROM rocker/r-ver:4.4.2@sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c AS builder
 
 # Ubuntu codename MUST match the base image. rocker/r-ver:4.4.2 is Ubuntu 24.04
 # (noble), not jammy. Getting this wrong does not fail loudly -- it silently
@@ -66,6 +66,58 @@ WORKDIR /project
 # does not invalidate the (expensive) package layer.
 COPY env/renv/renv.lock /project/renv.lock
 RUN R -q -e "renv::restore(lockfile = '/project/renv.lock', clean = TRUE, prompt = FALSE)"
+
+FROM rocker/r-ver:4.4.2@sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
+
+ARG PPM_SNAPSHOT=2025-01-15
+ARG UBUNTU_CODENAME=noble
+ARG PPM_URL=https://packagemanager.posit.co/cran/__linux__/${UBUNTU_CODENAME}/${PPM_SNAPSHOT}
+
+LABEL org.opencontainers.image.source="https://github.com/kimjj93/r-env-harness" \
+      org.opencontainers.image.description="Track A: renv + PPM snapshot, validated R environment" \
+      org.opencontainers.image.licenses="MIT" \
+      harness.track="renv" \
+      harness.ppm_snapshot="${PPM_SNAPSHOT}" \
+      harness.ubuntu_codename="${UBUNTU_CODENAME}"
+
+ENV RENV_CONFIG_REPOS_OVERRIDE=${PPM_URL} \
+    RENV_PATHS_CACHE=/renv/cache \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN . /etc/os-release && \
+    if [ "${VERSION_CODENAME}" != "${UBUNTU_CODENAME}" ]; then \
+      echo "FATAL: base image is '${VERSION_CODENAME}' but UBUNTU_CODENAME='${UBUNTU_CODENAME}'." >&2; \
+      echo "The PPM snapshot URL would serve binaries for the wrong OS." >&2; \
+      exit 1; \
+    fi && \
+    echo "OK: base image and PPM codename agree (${VERSION_CODENAME})"
+
+RUN echo "options(repos = c(CRAN = '${PPM_URL}'))" \
+      >> "${R_HOME}/etc/Rprofile.site"
+
+# Runtime-only system dependencies. Build-only headers and tooling stay in the
+# builder stage and are excluded from the final image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libcurl4t64 \
+      libssl3t64 \
+      libxml2 \
+      libfontconfig1 \
+      libharfbuzz0b \
+      libfribidi0 \
+      libfreetype6 \
+      libpng16-16t64 \
+      libtiff6 \
+      libjpeg-turbo8 \
+      libgit2-1.7 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /project
+
+# Bring forward the restored library tree and lockfile from the builder stage.
+COPY --from=builder /renv /renv
+COPY --from=builder /project /project
+COPY --from=builder /usr/local/lib/R/site-library /usr/local/lib/R/site-library
 
 # Project source comes after the package layer.
 COPY analysis/    /project/analysis/
