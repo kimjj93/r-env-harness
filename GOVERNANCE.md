@@ -75,6 +75,39 @@ rather than `GITHUB_TOKEN`, which allows PR creation without granting approval
 at all. That is the recommended hardening step before this pattern is used on
 anything carrying real submission evidence.
 
+### The `GITHUB_TOKEN` recursion limit, and why it is safe
+
+GitHub deliberately suppresses workflow triggers caused by `GITHUB_TOKEN`, to
+stop a workflow from starting itself forever. A consequence is easy to miss and
+important to understand:
+
+> **A pull request opened by a workflow using `GITHUB_TOKEN` does not trigger
+> `env-validate`.** The PR shows *no checks at all*.
+
+A PR displaying no checks looks superficially like a PR that passed quietly. It
+is the opposite. Because `env-validate` and `Governance lint` are **required**
+status checks, a missing check is treated as unsatisfied, and the PR is
+**blocked** — the failure mode is fail-closed, which is the correct direction.
+An unvalidated environment change cannot reach `main` this way.
+
+Note this affects only PRs opened *by workflows*. Pull requests opened by the
+Copilot coding agent during an `agent-race` come from a bot **user**, not from
+`GITHUB_TOKEN`, and trigger the gate normally.
+
+Two remedies, in order of preference:
+
+1. **Set a `HARNESS_BOT_TOKEN` secret** — a fine-grained PAT or GitHub App
+   installation token with *Contents: read & write* and *Pull requests: read &
+   write* on this repository only. All three PR-opening workflows use
+   `secrets.HARNESS_BOT_TOKEN || github.token`, so setting it is the only
+   required step. PRs then trigger the gate normally.
+2. **Close and reopen the pull request.** A human doing this re-triggers
+   `pull_request` and the gate runs. No secret needed, but it is manual — which
+   defeats the point of an unattended loop.
+
+When no bot token is configured, `build-fixtures` appends an explicit warning to
+the PR body so the reviewer is never left to infer why the checks are absent.
+
 ## 3. Why AI reviews are still worth having
 
 AI reviewers cannot approve, but they front-load the reviewer's work: they check

@@ -117,7 +117,7 @@ jobs:
 
       - name: Open a pull request with the regenerated baselines
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
           REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
@@ -166,6 +166,25 @@ jobs:
             echo "- [ ] The numeric changes in the diff are explained by that reason"
             echo "- [ ] No fixture was hand-edited (\`AGENTS.md\` §1.5)"
           } > pr-body.md
+          # A PR opened with GITHUB_TOKEN does not trigger `pull_request`
+          # workflows — GitHub blocks that to prevent recursive runs. The gate
+          # then never reports, and the PR is unmergeable rather than
+          # unvalidated (fail-closed). Say so in the PR itself, because a PR
+          # showing no checks is otherwise easy to misread as "nothing to run".
+          if [ -z "${{ secrets.HARNESS_BOT_TOKEN }}" ]; then
+            {
+              echo
+              echo "---"
+              echo
+              echo "> [!WARNING]"
+              echo "> **This PR was opened with \`GITHUB_TOKEN\`, so \`env-validate\` did not start.**"
+              echo "> GitHub suppresses workflow triggers from \`GITHUB_TOKEN\` to prevent recursion."
+              echo "> The required checks are *missing*, not passing — the PR is blocked, not approved."
+              echo ">"
+              echo "> To run the gate: **close and reopen this PR**, which re-triggers it as a human action."
+              echo "> To fix permanently: set a \`HARNESS_BOT_TOKEN\` secret (see \`GOVERNANCE.md\` §2)."
+            } >> pr-body.md
+          fi
           gh pr create \
             --base main \
             --head "$BRANCH" \
