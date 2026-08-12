@@ -148,7 +148,9 @@ jobs:
             echo "::error::a workflow attempts to merge pull requests"; fail=1
           fi
           if grep -rnE --exclude=skills-lint.yml \
-               'event:[[:space:]]*.?APPROVE|--approve' \
+               -e 'event[:=][[:space:]]*.?APPROVE' \
+               -e '--approve' \
+               -e 'pr[[:space:]]+review[^|]*--approve' \
                .github/workflows/ 2>/dev/null; then
             echo "::error::a workflow attempts to APPROVE pull requests"; fail=1
           fi
