@@ -15,7 +15,7 @@ args <- commandArgs(trailingOnly = TRUE)
 snapshot <- if (length(args) >= 1) args[[1]] else "2025-01-15"
 outfile  <- if (length(args) >= 2) args[[2]] else "env/renv/renv.lock"
 
-codename  <- "jammy"
+codename  <- "noble"   # must match rocker/r-ver:4.4.2 (Ubuntu 24.04)
 r_version <- "4.4.2"
 repo_url  <- sprintf(
   "https://packagemanager.posit.co/cran/__linux__/%s/%s", codename, snapshot

@@ -8,7 +8,7 @@ test_that("ADSL summary statistics reproduce the reference", {
   fx   <- load_fixture("adsl_summary")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["adsl_summary_reference"]]
-  crit <- read_critical_packages("validation/R/testcase_adsl.R")
+  crit <- read_critical_packages(harness_path("validation/R/testcase_adsl.R"))
 
   obs <- testcase_generate_adsl_summary()
 
@@ -52,7 +52,7 @@ test_that("ADAE summary statistics reproduce the reference", {
   fx   <- load_fixture("adae_summary")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["adae_summary_reference"]]
-  crit <- read_critical_packages("validation/R/testcase_adae.R")
+  crit <- read_critical_packages(harness_path("validation/R/testcase_adae.R"))
 
   obs <- testcase_generate_adae_summary()
 
@@ -90,7 +90,7 @@ test_that("RNG streams are stable across the environment", {
   fx   <- load_fixture("rng_kinds")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["rng_kinds_reference"]]
-  crit <- read_critical_packages("validation/R/testcase_numeric.R")
+  crit <- read_critical_packages(harness_path("validation/R/testcase_numeric.R"))
 
   obs <- testcase_generate_rng_kinds()
 
@@ -108,17 +108,21 @@ test_that("linear algebra results are stable across the environment", {
   fx   <- load_fixture("linalg")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["linalg_reference"]]
-  crit <- read_critical_packages("validation/R/testcase_numeric.R")
+  crit <- read_critical_packages(harness_path("validation/R/testcase_numeric.R"))
 
   obs <- testcase_generate_linalg()
 
   # BLAS/LAPACK implementations legitimately differ at the ULP level, so these
-  # are tolerant even under a matching environment. 1e-12 is well below any
-  # threshold that could affect a reported result.
+  # are tolerant even under a matching environment. The criterion is derived per
+  # quantity from the conditioning of the problem (see linalg_tolerance()) rather
+  # than fixed, because these values span four orders of magnitude and no single
+  # absolute tolerance is defensible across them.
+  kappa_sym <- testcase_linalg_kappa()
   for (nm in c("det", "eigen1", "solve_11", "chol_11", "svd_1")) {
     helper_expect_reference_match(
       obs[[nm]], ref[[nm]], meta,
-      case = paste0("LinAlg: ", nm), critical_packages = crit, tolerance = 1e-12
+      case = paste0("LinAlg: ", nm), critical_packages = crit,
+      tolerance = linalg_tolerance(ref[[nm]], kappa_sym)
     )
   }
 })

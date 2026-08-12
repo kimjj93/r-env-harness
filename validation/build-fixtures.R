@@ -14,10 +14,17 @@ suppressPackageStartupMessages({
   library(digest)
 })
 
-source("validation/R/helper_compare-reference.R")
-source("validation/R/testcase_adsl.R")
-source("validation/R/testcase_adae.R")
-source("validation/R/testcase_numeric.R")
+# Bootstrap: the helper defines harness_path(), so this one path is resolved
+# relative to this script's own location rather than the working directory.
+local({
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  root <- if (length(f)) dirname(dirname(normalizePath(f[1]))) else getwd()
+  source(file.path(root, "validation", "R", "helper_compare-reference.R"))
+})
+source(harness_path("validation/R/testcase_adsl.R"))
+source(harness_path("validation/R/testcase_adae.R"))
+source(harness_path("validation/R/testcase_numeric.R"))
 
 out_dir <- fixture_dir()
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -45,13 +52,13 @@ build_one <- function(name, generator, source_file) {
 }
 
 build_one("adsl_summary", testcase_generate_adsl_summary,
-          "validation/R/testcase_adsl.R")
+          harness_path("validation/R/testcase_adsl.R"))
 build_one("adae_summary", testcase_generate_adae_summary,
-          "validation/R/testcase_adae.R")
+          harness_path("validation/R/testcase_adae.R"))
 build_one("rng_kinds", testcase_generate_rng_kinds,
-          "validation/R/testcase_numeric.R")
+          harness_path("validation/R/testcase_numeric.R"))
 build_one("linalg", testcase_generate_linalg,
-          "validation/R/testcase_numeric.R")
+          harness_path("validation/R/testcase_numeric.R"))
 
 # Result checksums feed Layer 4 of the delta report.
 checksums <- list(

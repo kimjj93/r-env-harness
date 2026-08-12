@@ -10,10 +10,11 @@
 # a digest cannot. This is what makes "we used rocker 4.4.2" into evidence.
 FROM rocker/r-ver:4.4.2@sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
 
-# Ubuntu codename must match the base image (4.4.x -> jammy). A mismatch here
-# silently falls back to slow source builds instead of binaries.
+# Ubuntu codename MUST match the base image. rocker/r-ver:4.4.2 is Ubuntu 24.04
+# (noble), not jammy. Getting this wrong does not fail loudly -- it silently
+# serves binaries built for the wrong OS -- so the build asserts it below.
 ARG PPM_SNAPSHOT=2025-01-15
-ARG UBUNTU_CODENAME=jammy
+ARG UBUNTU_CODENAME=noble
 ARG PPM_URL=https://packagemanager.posit.co/cran/__linux__/${UBUNTU_CODENAME}/${PPM_SNAPSHOT}
 
 LABEL org.opencontainers.image.source="https://github.com/kimjj93/r-env-harness" \
@@ -27,9 +28,24 @@ ENV RENV_CONFIG_REPOS_OVERRIDE=${PPM_URL} \
     RENV_PATHS_CACHE=/renv/cache \
     DEBIAN_FRONTEND=noninteractive
 
+# Fail loudly if the declared codename does not match the base image. Without
+# this the mismatch is invisible: the build still succeeds, but against packages
+# compiled for a different OS -- which is precisely the class of silent drift
+# this repository exists to prevent.
+RUN . /etc/os-release && \
+    if [ "${VERSION_CODENAME}" != "${UBUNTU_CODENAME}" ]; then \
+      echo "FATAL: base image is '${VERSION_CODENAME}' but UBUNTU_CODENAME='${UBUNTU_CODENAME}'." >&2; \
+      echo "The PPM snapshot URL would serve binaries for the wrong OS." >&2; \
+      exit 1; \
+    fi && \
+    echo "OK: base image and PPM codename agree (${VERSION_CODENAME})"
+
 # Set the snapshot explicitly rather than inheriting the base image default.
 # An inherited default is not evidence.
-RUN echo "options(repos = c(CRAN = '${PPM_URL}'), pkgType = 'binary')" \
+# NOTE: no pkgType='binary' -- that value is unsupported on Linux. PPM serves
+# Linux binaries through the normal source path via the __linux__/<codename>
+# URL, so requesting 'binary' here fails the build outright.
+RUN echo "options(repos = c(CRAN = '${PPM_URL}'))" \
       >> "${R_HOME}/etc/Rprofile.site"
 
 # System dependencies required by the pharmaverse stack.
