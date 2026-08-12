@@ -1,0 +1,30 @@
+{
+  "r_version": "4.4.2",
+  "passed": 21, "failed": 0, "skipped": 0,
+  "strict": 20, "tolerant": 0,
+  "max_abs_deviation": 0e+00,
+  "tolerance_utilisation": null,
+  "result_checksums": {"adsl": "d260d608a36048e6d3d4c32e486a6002205d3cdf7998e9b01f79f7221947d240", "adae": "7a2fdad98f107ca46c45ef4d4d543d010731f3c92d2356efb78b49314e448fb6"},
+  "assertions": [
+    {"case":"ADSL: subject count","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADSL: safety population","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADSL: mean age","path":"Strict (exact)","business_tol":1e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADSL: SD age","path":"Strict (exact)","business_tol":1e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADSL: mean treatment duration","path":"Strict (exact)","business_tol":1e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADSL: age group distribution","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADAE: event count","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADAE: treatment-emergent count","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADAE: serious event count","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADAE: mean event duration","path":"Strict (exact)","business_tol":1e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"ADAE: severity distribution","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"admiral, dplyr, lubridate","passed":true},
+    {"case":"RNG: unif","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"RNG: norm","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"RNG: binom","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"RNG: samp","path":"Strict (exact)","business_tol":0,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"LinAlg: det","path":"Strict (exact)","business_tol":1e-13,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"LinAlg: eigen1","path":"Strict (exact)","business_tol":1.23607e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"LinAlg: solve_11","path":"Strict (exact)","business_tol":8.57606e-10,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"LinAlg: chol_11","path":"Strict (exact)","business_tol":1.62345e-11,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true},
+    {"case":"LinAlg: svd_1","path":"Strict (exact)","business_tol":3.35778e-11,"applied_tol":0,"max_abs_dev":0e+00,"critical":"stats","passed":true}
+  ]
+}
