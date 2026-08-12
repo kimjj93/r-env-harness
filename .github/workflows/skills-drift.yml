@@ -1,0 +1,140 @@
+name: skills-drift
+
+# Step 4: the instructions evolve like code.
+#
+# After work is merged, the accepted commits are the best available evidence of
+# how this repository actually behaves. If AGENTS.md or a SKILL.md now describes
+# something that is no longer true, the instructions have drifted and every
+# future agent inherits that error.
+#
+# This workflow detects drift mechanically and opens a PR proposing the fix. It
+# NEVER commits to main. An instruction change is the highest-consequence diff
+# in this repository -- it changes the behaviour of every future agent -- so it
+# gets more human scrutiny than a code change, not less.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: skills-drift
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Look for contradictions between the docs and the repository
+        id: drift
+        run: |
+          set -euo pipefail
+          : > /tmp/drift.md
+          drift=0
+          note () { echo "- $1" >> /tmp/drift.md; drift=1; }
+
+          # Every referenced path must exist. A SKILL.md that points at a file
+          # someone renamed sends the next agent hunting, and agents that cannot
+          # find a referenced file tend to invent a plausible substitute.
+          while read -r f; do
+            grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' "$f" 2>/dev/null \
+              | tr -d '`' | sort -u | while read -r ref; do
+                case "$ref" in */*) ;; *) continue ;; esac
+                [ -e "$ref" ] || echo "MISSING|$f|$ref" >> /tmp/missing.txt
+              done
+          done < <(find . -name 'SKILL.md' -o -name 'AGENTS.md' -o -name 'GOVERNANCE.md' | grep -v '^./.git/')
+
+          if [ -s /tmp/missing.txt ]; then
+            while IFS='|' read -r _ src ref; do
+              note "\`$src\` references \`$ref\`, which does not exist. Either the path moved or the instruction is stale."
+            done < /tmp/missing.txt
+          fi
+
+          # Every skill directory should be discoverable from the root contract,
+          # otherwise it exists but no agent is told to read it.
+          for d in skills/*/; do
+            name=$(basename "$d")
+            grep -q "$name" AGENTS.md || \
+              note "\`skills/$name/\` is not mentioned in \`AGENTS.md\`, so agents have no reason to read it."
+          done
+
+          # Workflows referenced by the docs should exist, and vice versa.
+          for wf in .github/workflows/*.yml; do
+            base=$(basename "$wf")
+            if ! grep -rqF "$base" AGENTS.md GOVERNANCE.md README.md skills/ 2>/dev/null; then
+              note "\`$base\` exists but is not documented in \`AGENTS.md\`, \`GOVERNANCE.md\`, \`README.md\` or any skill. Undocumented automation is automation nobody reviews."
+            fi
+          done
+
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+          echo "--- findings ---"; cat /tmp/drift.md || true
+
+      - name: Open a documentation proposal
+        if: steps.drift.outputs.drift == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="docs/drift-$(date -u +%Y%m%d-%H%M%S)"
+
+          # If an unreviewed drift PR is already open, adding another would just
+          # multiply review load for the same class of problem.
+          if gh pr list --state open --label skills-drift --json number --jq 'length' | grep -qv '^0$'; then
+            echo "::notice::A skills-drift PR is already open; not opening another."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          mkdir -p evidence/drift
+          REPORT="evidence/drift/$(date -u +%Y-%m-%d)-drift.md"
+          {
+            echo "# Instruction drift detected"
+            echo
+            echo "Found after merging \`${{ github.sha }}\`."
+            echo
+            echo "## Findings"
+            echo
+            cat /tmp/drift.md
+            echo
+            echo "## Why this matters"
+            echo
+            echo "These files are the contract every agent reads before acting."
+            echo "An instruction that no longer matches the repository does not"
+            echo "fail loudly -- it quietly misleads the next agent, and the"
+            echo "resulting mistake looks like an agent error rather than a"
+            echo "documentation error."
+            echo
+            echo "## What is being asked of you"
+            echo
+            echo "This PR reports drift; it does not guess at the wording. Decide"
+            echo "whether each finding means the docs should be corrected or the"
+            echo "repository should be. Both are legitimate outcomes."
+          } > "$REPORT"
+
+          git add "$REPORT"
+          git commit \
+            -m "docs: instruction drift detected after ${{ github.sha }}" \
+            -m "Automated detection of contradictions between AGENTS.md / skills and the current state of the repository. Reported, not auto-corrected: instruction changes alter the behaviour of every future agent and warrant human wording."
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "docs: instruction drift detected" \
+            --body-file "$REPORT" \
+            --label "skills-drift" \
+            --label "needs-human-review"
+
+      - name: No drift
+        if: steps.drift.outputs.drift != '1'
+        run: echo "::notice::Instructions are consistent with the repository."
