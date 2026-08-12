@@ -221,13 +221,39 @@ threads=4  svd_1=1.02006622600000207512e+03
 threads=8  svd_1=1.02006622600000184775e+03
 ```
 
-Every value differs. Both Dockerfiles now pin `OPENBLAS_NUM_THREADS=1`, and the
-thread count is part of the recorded backend identity — so a future unpinned
+Every value differs.
+
+**And pinning threads was still not enough.** Fixtures regenerated with threads
+pinned self-validated at deviation 0 in the run that produced them, then failed
+at 1.42e-14 in the *next* run on main — same commit, same image digest, different
+runner. OpenBLAS also selects a *kernel* at runtime from the detected CPU, and
+GitHub's runner fleet is heterogeneous. One digest, one thread, kernel varied:
+
+```
+HASWELL      solve_11=3.14491662711728885843e-03
+SANDYBRIDGE  solve_11=3.14491662711728929211e-03
+NEHALEM      solve_11=3.14491662711728885843e-03
+```
+
+Both Dockerfiles now pin `OPENBLAS_NUM_THREADS=1` **and** `OPENBLAS_CORETYPE`,
+and both are part of the recorded backend identity, so a future unpinned
 environment is reported as an environment change rather than a numeric mystery.
+Verified afterwards: three independent runs on separate runners, all
+`strict=20, tolerant=0, max_abs_deviation=0`.
+
+⚠️ Forcing a kernel the CPU cannot execute **hangs** rather than failing
+cleanly. Pick for the oldest CPU in your fleet; override with
+`--build-arg OPENBLAS_CORETYPE=NEHALEM` if you need to.
 
 The general lesson generalises past BLAS: **when results move but the recorded
 environment does not, suspect something real that you are not recording yet.**
 Widening the critical-package list is one hypothesis, not the conclusion.
+
+It is also worth noticing *how* this was found. A container image is not
+sufficient for numerical reproducibility. A digest pins the bits on disk; it does
+not pin the CPU that executes them, and an optimised BLAS is specifically
+designed to behave differently on different CPUs. Anyone claiming
+"reproducible because containerised" has not tested this.
 
 ---
 

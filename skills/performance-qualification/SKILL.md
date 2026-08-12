@@ -39,7 +39,14 @@ Phase 3  render report     (human-readable audit trail)
 ## Strict vs. tolerant — the central design
 
 Do **not** demand bit-for-bit equality unconditionally. Demand it only when the
-environment is provably identical to the one that produced the baseline:
+environment is provably identical to the one that produced the baseline.
+
+Note what "identical" has to include. It is **not** enough that the image digest
+matches. An optimised BLAS chooses both a thread count and a CPU kernel at
+*runtime*, and both change the last bits of a linear-algebra result. Two runs of
+one image digest on two different machines are genuinely different numerical
+environments. Pin `OPENBLAS_NUM_THREADS` and `OPENBLAS_CORETYPE` in the image,
+and record both, or the strict path is claiming more than the evidence supports:
 
 ```r
 helper_reference_env_matches <- function(meta, critical_packages = character(0)) {
@@ -49,7 +56,8 @@ helper_reference_env_matches <- function(meta, critical_packages = character(0))
   # The numerical backend is part of the environment's identity.
   if (is.null(meta$backend)) return(FALSE)
   live <- numeric_backend_meta()
-  for (k in c("platform", "arch", "blas", "lapack")) {
+  for (k in c("platform", "arch", "blas", "lapack",
+              "blas_threads", "blas_coretype")) {
     if (!identical(as.character(meta$backend[[k]]),
                    as.character(live[[k]]))) return(FALSE)
   }
