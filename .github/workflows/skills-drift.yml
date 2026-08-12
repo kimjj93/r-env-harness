@@ -45,11 +45,14 @@ jobs:
           # someone renamed sends the next agent hunting, and agents that cannot
           # find a referenced file tend to invent a plausible substitute.
           while read -r f; do
+            # `|| true` matters: under `set -o pipefail`, grep finding nothing
+            # returns 1 and would abort the whole scan. A doc that references no
+            # paths is normal, not an error.
             grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' "$f" 2>/dev/null \
               | tr -d '`' | sort -u | while read -r ref; do
                 case "$ref" in */*) ;; *) continue ;; esac
                 [ -e "$ref" ] || echo "MISSING|$f|$ref" >> /tmp/missing.txt
-              done
+              done || true
           done < <(find . -name 'SKILL.md' -o -name 'AGENTS.md' -o -name 'GOVERNANCE.md' | grep -v '^./.git/')
 
           if [ -s /tmp/missing.txt ]; then

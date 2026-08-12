@@ -19,6 +19,10 @@ permissions:
 
 jobs:
   lint:
+    # This name is the required status check context in the branch ruleset.
+    # Renaming it silently detaches the gate, so the ruleset must be updated
+    # in the same change.
+    name: Governance lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
