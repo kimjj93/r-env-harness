@@ -1,0 +1,5 @@
+"candidate_id","track","dimension","status","verdict","pq_passed","pq_failed","tol_util","pkg_churn","build_seconds","image_size_mb","eligible","blocked_by"
+"base-digest-refresh","renv","base_digest","success","BASELINE_ESTABLISHED",21,0,NA,NA,100,1457,TRUE,""
+"nixpkgs-2025-04-01","nix","nixpkgs_date","unsupported","NOT_EVALUATED",NA,NA,NA,NA,NA,NA,FALSE,"status=unsupported"
+"ppm-2025-04-01","renv","ppm_snapshot","success","BASELINE_ESTABLISHED",21,0,NA,NA,104,1462,TRUE,""
+"ppm-2025-07-01","renv","ppm_snapshot","pq_failed","BASELINE_ESTABLISHED",19,2,NA,NA,139,1462,FALSE,"status=pq_failed; pq_failed=2"
