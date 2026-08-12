@@ -69,7 +69,7 @@ jobs:
       - name: Open exactly one pull request
         if: steps.decide.outputs.recommendation == 'PROPOSE'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
         run: |
           set -euo pipefail
           ID=$(cat .proposal-id)

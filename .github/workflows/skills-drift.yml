@@ -83,7 +83,7 @@ jobs:
       - name: Open a documentation proposal
         if: steps.drift.outputs.drift == '1'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
         run: |
           set -euo pipefail
           BRANCH="docs/drift-$(date -u +%Y%m%d-%H%M%S)"
