@@ -113,12 +113,16 @@ test_that("linear algebra results are stable across the environment", {
   obs <- testcase_generate_linalg()
 
   # BLAS/LAPACK implementations legitimately differ at the ULP level, so these
-  # are tolerant even under a matching environment. 1e-12 is well below any
-  # threshold that could affect a reported result.
+  # are tolerant even under a matching environment. The criterion is derived per
+  # quantity from the conditioning of the problem (see linalg_tolerance()) rather
+  # than fixed, because these values span four orders of magnitude and no single
+  # absolute tolerance is defensible across them.
+  kappa_sym <- testcase_linalg_kappa()
   for (nm in c("det", "eigen1", "solve_11", "chol_11", "svd_1")) {
     helper_expect_reference_match(
       obs[[nm]], ref[[nm]], meta,
-      case = paste0("LinAlg: ", nm), critical_packages = crit, tolerance = 1e-12
+      case = paste0("LinAlg: ", nm), critical_packages = crit,
+      tolerance = linalg_tolerance(ref[[nm]], kappa_sym)
     )
   }
 })

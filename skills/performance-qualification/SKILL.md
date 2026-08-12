@@ -110,6 +110,44 @@ read by the fixture builder at build time:
 Adding or removing a critical dependency is therefore a one-line documentation
 change — no build system edits.
 
+## Deriving a tolerance
+
+A tolerance is an acceptance criterion and must be derived, not chosen. The
+harness learned this the hard way: a flat `1e-12` was applied to five linear
+algebra quantities spanning `5.7e-3` to `9.4e1`. That is `2e-10` relative on the
+smallest and `1e-14` relative on the largest — simultaneously far too loose and
+tighter than double precision can deliver. It passed only until the BLAS changed.
+
+Derive from the arithmetic instead. For a linear algebra result `x` computed from
+a matrix with condition number `k`, error is bounded on the order of
+`eps * |x| * k`:
+
+```r
+linalg_tolerance <- function(ref_value, kappa, safety = 10,
+                             floor = 1e-13, ceiling = 1e-6) {
+  tol <- max(.Machine$double.eps * abs(ref_value) * kappa * safety, floor)
+  if (tol > ceiling) stop("derived tolerance exceeds the hard cap")
+  tol
+}
+```
+
+Three properties make this reviewable:
+
+- **It scales.** Each quantity gets a criterion proportionate to its own
+  magnitude and conditioning.
+- **It has a floor.** Values near zero do not get a criterion of ~0.
+- **It has a hard cap, and the cap is fatal.** A derivation is still capable of
+  producing an absurd number if the inputs are absurd. If conditioning is so poor
+  that the derived tolerance exceeds `1e-6`, the assertion has stopped being
+  meaningful — that is a defect in the test, not a licence to accept the value.
+
+Always report utilisation (`observed / tolerance`) rather than a bare pass. The
+harness's linear algebra assertions run at **under 1% of their derived bounds**;
+a run at 95% is nominally passing while telling you something is wrong.
+
+See `AGENTS.md` §1.6 for the rule separating a legitimate correction from
+weakening a gate: *would this change still be correct if the test were passing?*
+
 ## The recorder
 
 For every assertion, record and carry into the report:

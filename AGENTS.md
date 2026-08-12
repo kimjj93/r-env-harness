@@ -42,6 +42,26 @@ regardless of the quality of its output.
 6. **Never weaken a gate to make a build pass.** Do not raise a tolerance,
    disable a test, add `continue-on-error`, or delete an assertion in order to go
    green. If a gate blocks you, the finding *is* the deliverable — report it.
+
+   This rule bans a *motive*, not an edit. An acceptance criterion may legitimately
+   be corrected, and the test that separates the two cases is:
+
+   > Would this change still be correct if the test were currently passing?
+
+   A tolerance derived from numerical analysis — the conditioning of the problem,
+   the magnitude of the quantity, the precision of the arithmetic — is a criterion,
+   and correcting it is legitimate even though it happens to unblock a build. A
+   tolerance chosen because it is slightly larger than the deviation you happened
+   to observe is a rationalisation, and is prohibited.
+
+   When you change any acceptance criterion you must, in the same PR:
+   - derive the new value from stated principles, showing the arithmetic;
+   - report the observed deviation as a **percentage of the new criterion**, so a
+     reviewer can see the margin rather than a bare pass;
+   - state the hard cap the derivation can never exceed, and why the cap is safe
+     for a reported clinical result.
+
+   A derived criterion with no cap is an unbounded criterion. Always bound it.
 7. **Never introduce a floating version.** No `latest` tags, no unpinned
    `install.packages()`, no undated repository URLs. Every dependency resolves to
    a fixed version, date, or digest.
