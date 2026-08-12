@@ -108,6 +108,41 @@ Two remedies, in order of preference:
 When no bot token is configured, `build-fixtures` appends an explicit warning to
 the PR body so the reviewer is never left to infer why the checks are absent.
 
+### `HARNESS_BOT_TOKEN` is mandatory for `agent-race`
+
+For the workflows above the token is an *improvement*: without it the loop still
+runs and fails closed. For `agent-race` it is a hard **prerequisite**, and the
+distinction is worth stating plainly because the failure is not obvious.
+
+Assigning an issue to a coding agent uses the `replaceActorsForAssignable`
+GraphQL mutation, and GitHub rejects it outright for App installation tokens:
+
+```
+FORBIDDEN: Assigning agents is not supported with GitHub App installation
+tokens. Use a user token (personal access token or OAuth token) instead.
+```
+
+`GITHUB_TOKEN` **is** an App installation token, so no configuration of
+`permissions:` can make this work. Verified: the same mutation with the same
+actor ID succeeds with a user token and fails with `GITHUB_TOKEN`.
+
+There is a second, quieter consequence. The `suggestedActors` query returns a
+*different set of agents depending on the token*:
+
+| Token | Agents returned |
+|---|---|
+| `GITHUB_TOKEN` | `anthropic-code-agent`, `openai-code-agent` |
+| user token / PAT | those **plus `copilot-swe-agent`** |
+
+So under `GITHUB_TOKEN` the Copilot racer is not merely unassignable — it is
+invisible, and would silently never appear in a race. The workflow now names
+this case explicitly rather than reporting a generic skip.
+
+The token needs `repo` scope (classic) or *Issues: read & write* plus
+*Pull requests: read & write* (fine-grained). Until it is set, `agent-race`
+fails loudly, closes any issue it created but could not assign, and tells you
+exactly which secret is missing. It does not pretend to have started a race.
+
 ## 3. Why AI reviews are still worth having
 
 AI reviewers cannot approve, but they front-load the reviewer's work: they check
