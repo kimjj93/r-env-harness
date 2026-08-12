@@ -1,0 +1,12 @@
+# Posit Package Manager snapshot pin for Track A.
+# Greppable and diffable independently of the Dockerfile so that a snapshot
+# change is unmistakable in a PR diff.
+#
+# Format: https://packagemanager.posit.co/cran/__linux__/<codename>/<YYYY-MM-DD>
+# The codename MUST match the base image (rocker/r-ver:4.4.x -> jammy).
+
+PPM_SNAPSHOT=2025-01-15
+UBUNTU_CODENAME=jammy
+R_VERSION=4.4.2
+BASE_IMAGE=rocker/r-ver:4.4.2
+BASE_DIGEST=sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
