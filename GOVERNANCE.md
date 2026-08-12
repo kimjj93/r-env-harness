@@ -90,11 +90,52 @@ status checks, a missing check is treated as unsatisfied, and the PR is
 **blocked** — the failure mode is fail-closed, which is the correct direction.
 An unvalidated environment change cannot reach `main` this way.
 
-Note this affects only PRs opened *by workflows*. Pull requests opened by the
-Copilot coding agent during an `agent-race` come from a bot **user**, not from
-`GITHUB_TOKEN`, and trigger the gate normally.
+Note this affects only PRs opened *by workflows*. Pull requests opened by a
+coding agent during an `agent-race` come from a bot **user**, not from
+`GITHUB_TOKEN`, so they are subject to a different control — described next.
 
-Two remedies, in order of preference:
+### Agent pull requests require a human to approve running CI
+
+This was originally documented here as "agent PRs trigger the gate normally".
+That was **wrong**, and observing a real race corrected it.
+
+When a coding agent opens a PR, GitHub treats it as an external contributor.
+Its workflow runs are created but land in **`action_required`** and do not
+execute until a human clicks **"Approve and run workflows"** on the PR. Observed
+directly: both racer PRs in the first live race showed *no checks*, with
+`env-validate` runs sitting at `conclusion=action_required`.
+
+Two things follow, and they matter in opposite directions.
+
+**It is not a bug, and you should not route around it.** Workflows can read
+secrets and hold write permissions. Running unreviewed, agent-authored code in
+that context, automatically, is precisely the supply-chain risk that
+`pull_request_target` misuse has caused in real projects. This approval is the
+last checkpoint before AI-written code executes with your repository's
+credentials. It is a *stronger* version of the same principle the rest of this
+document is built on.
+
+**But it does mean the race is not fully unattended.** The honest statement is:
+the research loop and the weekly proposal run with zero human input; an agent
+race costs you one click per racer before its evidence appears. Budget for that
+rather than being surprised by it.
+
+Note also that `close/reopen` does **not** clear this state — verified. That
+remedy works for `GITHUB_TOKEN` PRs, not agent PRs. To evaluate an agent branch
+without granting it CI, dispatch the gate against the branch directly:
+
+```bash
+gh workflow run env-validate.yml --ref <agent-branch>
+```
+
+This runs with *you* as the triggering actor, so no approval is required, and it
+produces the same build and PQ evidence.
+
+GitHub does offer a repository setting to skip approval for coding-agent
+workflows. **This harness recommends leaving it on.** Turning it off buys a
+click and sells the checkpoint.
+
+Two remedies for the `GITHUB_TOKEN` case, in order of preference:
 
 1. **Set a `HARNESS_BOT_TOKEN` secret** — a fine-grained PAT or GitHub App
    installation token with *Contents: read & write* and *Pull requests: read &

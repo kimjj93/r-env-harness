@@ -119,6 +119,29 @@ racer that weakens a gate to win will fail `skills-lint`.
 If a racer cannot be assigned, its issue is closed automatically — an unassigned
 racer issue is litter, because nothing will ever work on it.
 
+### You must approve CI on each racer PR
+
+Agent PRs show **no checks** until you click **"Approve and run workflows"**.
+GitHub treats a coding agent as an external contributor, and its workflow runs
+sit in `action_required` until a human releases them.
+
+Do not read "no checks" as "passed". Because the checks are required, the PR is
+blocked either way — but the evidence you need in order to judge the race does
+not exist yet.
+
+This is the one place the loop is genuinely not unattended, and it is worth the
+cost: workflows can read secrets, so this is the last checkpoint before
+AI-written code runs with your repository's credentials.
+
+`close/reopen` does **not** clear it (verified). To get build and PQ evidence for
+an agent branch without granting it CI:
+
+```bash
+gh workflow run env-validate.yml --ref <agent-branch>
+```
+
+You are the triggering actor, so it runs immediately.
+
 ---
 
 ## 5. Changing the rules
@@ -168,7 +191,8 @@ fingerprinting: build fixtures where you can prove the hardware.
 |---|---|---|
 | PQ fails, `strict=N, tolerant=0` | environment identical, numbers moved | **investigate** — a real regression |
 | PQ fails, assertions `tolerant` | environment changed as expected | read max deviation vs tolerance |
-| PR shows no checks | opened by `GITHUB_TOKEN` | set `HARNESS_BOT_TOKEN`; or close/reopen |
+| PR shows no checks, workflow-opened | opened by `GITHUB_TOKEN` | set `HARNESS_BOT_TOKEN`; or close/reopen |
+| PR shows no checks, agent-opened | runs in `action_required` | click **Approve and run workflows** |
 | Track B `unsupported` | package unavailable in nixpkgs | expected for ~5% of CRAN; not a failure |
 | Nightly candidate red | candidate is bad | none — that is the loop working |
 | `agent-race` fails immediately | no agent assignable | set `HARNESS_BOT_TOKEN` |
