@@ -8,8 +8,8 @@
 #' admiral, dplyr, lubridate.
 
 testcase_generate_adae_summary <- function() {
-  sys.source("analysis/adsl.R", envir = globalenv())
-  sys.source("analysis/adae.R", envir = globalenv())
+  sys.source(harness_path("analysis/adsl.R"), envir = globalenv())
+  sys.source(harness_path("analysis/adae.R"), envir = globalenv())
   adsl <- build_adsl()
   adae <- build_adae(adsl)
 
@@ -29,8 +29,8 @@ testcase_generate_adae_summary <- function() {
 
 #' Deterministic checksum of the full ADAE, for Layer 4 of the delta report.
 testcase_adae_checksum <- function() {
-  sys.source("analysis/adsl.R", envir = globalenv())
-  sys.source("analysis/adae.R", envir = globalenv())
+  sys.source(harness_path("analysis/adsl.R"), envir = globalenv())
+  sys.source(harness_path("analysis/adae.R"), envir = globalenv())
   adsl <- build_adsl()
   adae <- build_adae(adsl)
   adae <- adae[order(adae$STUDYID, adae$USUBJID, adae$AESEQ), ]

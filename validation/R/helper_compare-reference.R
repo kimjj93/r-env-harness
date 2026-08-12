@@ -167,9 +167,45 @@ helper_expect_reference_match <- function(object, reference, meta, case,
 # Fixture I/O.
 # ---------------------------------------------------------------------------
 
+# Locate the project root ONCE, absolutely.
+#
+# This must not be a relative path. testthat changes the working directory to
+# the test file's own directory while running, so a relative fixture path
+# resolves correctly in a plain Rscript session and then fails inside the test
+# suite. That failure surfaces as an ordinary assertion failure, which is
+# indistinguishable from genuine numeric drift -- a configuration error wearing
+# the costume of a validation finding. In a harness whose entire purpose is
+# trustworthy pass/fail signals, that is the most damaging bug available, so
+# the root is resolved explicitly and verified.
+harness_root <- function() {
+  explicit <- Sys.getenv("HARNESS_ROOT", unset = "")
+  if (nzchar(explicit)) return(normalizePath(explicit, mustWork = FALSE))
+
+  # Walk upward looking for a directory that is unmistakably the project root.
+  d <- normalizePath(getwd(), mustWork = FALSE)
+  for (i in 1:6) {
+    if (file.exists(file.path(d, "AGENTS.md")) ||
+        dir.exists(file.path(d, "validation", "fixtures"))) {
+      return(d)
+    }
+    parent <- dirname(d)
+    if (identical(parent, d)) break
+    d <- parent
+  }
+  # Container default. Explicit is better than a silently wrong relative path.
+  if (dir.exists("/project")) "/project" else normalizePath(getwd())
+}
+
+# Resolve any repository-relative path against the harness root. Every path in
+# the test cases goes through this, for the reason above: testthat moves the
+# working directory, so a bare relative path is a latent failure.
+harness_path <- function(...) file.path(harness_root(), ...)
+
 fixture_dir <- function() {
-  base <- Sys.getenv("RVALIDATION_FIXTURE_DIR",
-                     unset = "validation/fixtures/references")
+  base <- Sys.getenv("RVALIDATION_FIXTURE_DIR", unset = "")
+  if (!nzchar(base)) {
+    base <- file.path(harness_root(), "validation", "fixtures", "references")
+  }
   ver <- Sys.getenv("VALIDATION_REF_VERSION", unset = "")
   if (!nzchar(ver)) {
     ver <- paste0("R-", paste(getRversion()[1, 1:2], collapse = "."))
@@ -180,12 +216,23 @@ fixture_dir <- function() {
 load_fixture <- function(name) {
   path <- file.path(fixture_dir(), paste0(name, ".rda"))
   if (!file.exists(path)) {
-    stop("Fixture not found: ", path,
-         "\nRun Phase 1 (validation/build-fixtures.R) in a trusted environment.")
+    # Distinguish "the baseline is missing" from "the results changed". They
+    # demand opposite responses: one is a setup step, the other is a finding.
+    stop("FIXTURE MISSING (this is a setup problem, not a validation finding): ",
+         path,
+         "\nRun Phase 1 (validation/build-fixtures.R) in a trusted environment",
+         "\nand commit the resulting baselines. Resolved harness root: ",
+         harness_root())
   }
   e <- new.env(parent = emptyenv())
   load(path, envir = e)
-  as.list(e)
+  # all.names = TRUE is essential: the environment metadata is stored as
+  # `.validation_env_meta`, and as.list() omits dot-prefixed names by default.
+  # Without it the metadata silently vanishes, every comparison quietly
+  # degrades from strict to tolerant, and the suite reports a clean pass while
+  # running the WEAKER check. Failing toward the weaker check is the most
+  # dangerous direction available to a validation harness.
+  as.list(e, all.names = TRUE)
 }
 
 #' Capture the environment metadata stored alongside every fixture.

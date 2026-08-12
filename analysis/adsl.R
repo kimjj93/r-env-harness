@@ -22,12 +22,21 @@ build_adsl <- function() {
   ex <- ex %>% convert_blanks_to_na()
 
   # First and last exposure dates, derived from EX.
+  #
+  # max(..., na.rm = TRUE) over an all-NA group returns -Inf, not NA, which
+  # would silently produce an infinite TRTDURD for any subject with a start
+  # date but no recorded end date. Guard explicitly: "unknown" must stay
+  # missing rather than becoming a number.
+  safe_max_date <- function(x) {
+    if (all(is.na(x))) as.Date(NA) else max(x, na.rm = TRUE)
+  }
+
   ex_dates <- ex %>%
     derive_vars_dt(dtc = EXSTDTC, new_vars_prefix = "EXST") %>%
     derive_vars_dt(dtc = EXENDTC, new_vars_prefix = "EXEN") %>%
     filter(!is.na(EXSTDT)) %>%
     group_by(USUBJID) %>%
-    summarise(TRTSDT = min(EXSTDT), TRTEDT = max(EXENDT, na.rm = TRUE),
+    summarise(TRTSDT = min(EXSTDT), TRTEDT = safe_max_date(EXENDT),
               .groups = "drop")
 
   adsl <- dm %>%

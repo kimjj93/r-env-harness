@@ -11,3 +11,6 @@ result-*
 *.html
 !validation/report/*.html
 .DS_Store
+
+# Local build scratch
+.harness-probe
