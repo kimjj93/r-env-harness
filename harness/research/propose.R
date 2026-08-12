@@ -43,22 +43,79 @@ if (dimension == "ppm_snapshot" && nzchar(new_value)) {
   f <- file.path(root, "env/renv/ppm-snapshot.txt")
   txt <- readLines(f, warn = FALSE)
   old <- sub("^PPM_SNAPSHOT=", "", grep("^PPM_SNAPSHOT=", txt, value = TRUE)[1])
-  txt <- sub("^PPM_SNAPSHOT=.*", paste0("PPM_SNAPSHOT=", new_value), txt)
-  writeLines(txt, f)
-  applied <- sprintf("PPM snapshot %s -> %s", old, new_value)
-  message("Applied: ", applied)
+  if (identical(old, new_value)) {
+    message("PPM snapshot is already ", new_value, " - nothing to propose.")
+  } else {
+    txt <- sub("^PPM_SNAPSHOT=.*", paste0("PPM_SNAPSHOT=", new_value), txt)
+    writeLines(txt, f)
+    applied <- sprintf("PPM snapshot %s -> %s", old, new_value)
+    message("Applied: ", applied)
+  }
 } else if (dimension == "nixpkgs_date" && nzchar(new_value)) {
   f <- file.path(root, "env/nix/nixpkgs-pin.txt")
   if (file.exists(f)) {
     txt <- readLines(f, warn = FALSE)
     old <- sub("^NIXPKGS_DATE=", "", grep("^NIXPKGS_DATE=", txt, value = TRUE)[1])
-    txt <- sub("^NIXPKGS_DATE=.*", paste0("NIXPKGS_DATE=", new_value), txt)
-    writeLines(txt, f)
-    applied <- sprintf("nixpkgs date %s -> %s", old, new_value)
+    if (identical(old, new_value)) {
+      message("nixpkgs date is already ", new_value, " - nothing to propose.")
+    } else {
+      txt <- sub("^NIXPKGS_DATE=.*", paste0("NIXPKGS_DATE=", new_value), txt)
+      writeLines(txt, f)
+      applied <- sprintf("nixpkgs date %s -> %s", old, new_value)
+      message("Applied: ", applied)
+    }
   }
 } else if (dimension == "base_digest") {
-  applied <- "base image digest refresh (see delta below)"
+  # This branch used to set a description and edit nothing, so the loop could
+  # spend the human's single weekly review on a pull request that changed no
+  # file at all. Resolve the digest and edit the FROM line, or propose nothing.
+  new_digest <- Sys.getenv("CANDIDATE_BASE_DIGEST", unset = "")
+  if (!nzchar(new_digest)) new_digest <- raw$base_digest %||% ""
+  f <- file.path(root, "env/renv/Dockerfile")
+  txt <- readLines(f, warn = FALSE)
+  i <- grep("^FROM .*@sha256:", txt)[1]
+  if (nzchar(new_digest) && !is.na(i)) {
+    old_digest <- sub(".*@(sha256:[0-9a-f]+).*", "\\1", txt[i])
+    if (identical(old_digest, new_digest)) {
+      message("Base digest is already ", new_digest, " - nothing to propose.")
+    } else {
+      txt[i] <- sub("@sha256:[0-9a-f]+", paste0("@", new_digest), txt[i])
+      writeLines(txt, f)
+      applied <- sprintf("base image digest %s -> %s", old_digest, new_digest)
+      message("Applied: ", applied)
+    }
+  } else {
+    message("No resolvable base digest for this candidate - nothing to propose.")
+  }
 }
+
+# ---- refuse to propose a change that is not a change ----------------------
+#
+# A proposal PR exists to spend a scarce resource: one human review per week.
+# Opening one that edits no environment pin trains the reviewer to skim, which
+# is precisely the failure mode this harness is built to avoid. If nothing was
+# applied, say so and let the workflow record a quiet week instead.
+
+status_path <- file.path(root, ".proposal-status.json")
+if (identical(applied, "none")) {
+  writeLines(c(
+    "{",
+    '  "changed": false,',
+    sprintf('  "candidate": "%s",', id),
+    sprintf('  "dimension": "%s",', dimension),
+    '  "reason": "the winning candidate produced no edit to any environment pin"',
+    "}"
+  ), status_path)
+  message("")
+  message("NO-OP PROPOSAL: candidate '", id, "' (dimension '", dimension,
+          "') matches the incumbent pin.")
+  message("Not opening a pull request. This is a successful outcome: the ",
+          "research loop confirmed the current pin is still the best available.")
+  quit(status = 0)
+}
+writeLines(c("{", '  "changed": true,',
+             sprintf('  "candidate": "%s",', id),
+             sprintf('  "applied": "%s"', applied), "}"), status_path)
 
 # ---- compose the proposal -------------------------------------------------
 
@@ -99,7 +156,19 @@ L <- c(L, switch(verdict,
     "Numeric outputs moved but stayed inside the declared business tolerance.",
     "**Review the tolerance utilisation below before accepting** -- a change that",
     "passes at 95% of tolerance has consumed nearly all the available headroom."),
-  c("Verdict not recognised; inspect `delta.md` in the run artifacts before acting.")
+  "BASELINE_ESTABLISHED" = c(
+    "No incumbent manifest was available to diff against, so this run recorded a",
+    "baseline rather than a comparison. **The PQ result below is still meaningful**",
+    "-- the payload was validated against the committed fixtures -- but the",
+    "package-level delta is not, because there was nothing to compare with.",
+    "Expect a real delta on the next cycle."),
+  "NOT_EVALUATED" = c(
+    "This candidate was never evaluated; treat every metric below as absent",
+    "rather than as a pass."),
+  c(sprintf("Verdict `%s` is not recognised by `propose.R`. Inspect `delta.md` in the",
+            verdict),
+    "run artifacts before acting, and add this verdict to the interpretation map",
+    "-- an unexplained verdict in a regulatory proposal is a defect in the harness.")
 ))
 
 L <- c(L, "",

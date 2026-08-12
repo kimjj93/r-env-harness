@@ -83,6 +83,17 @@ if (file.exists(cand_file)) {
   if (length(m)) risk_min <- as.numeric(sub(".*:\\s*", "", m[1]))
 }
 
+# The value the candidate actually tested, recovered from the dimension it
+# varies. A candidate with no realised value cannot be turned into a pin edit.
+realised_value <- function(r) {
+  v <- switch(as.character(r$dimension %||% ""),
+    "ppm_snapshot" = r$ppm_snapshot %||% "",
+    "nixpkgs_date" = r$nixpkgs_date %||% "",
+    "base_digest"  = r$base_digest  %||% "",
+    "")
+  if (is.null(v) || length(v) == 0 || is.na(v)) "" else as.character(v)
+}
+
 passes_gates <- function(r) {
   reasons <- character(0)
   if ((r$status %||% "unknown") != "success")        reasons <- c(reasons, sprintf("status=%s", r$status %||% "unknown"))
@@ -90,6 +101,14 @@ passes_gates <- function(r) {
   if (as.numeric(r$pq_failed %||% 0) > gate_pq_max)  reasons <- c(reasons, sprintf("pq_failed=%s", r$pq_failed))
   rm_score <- suppressWarnings(as.numeric(r$riskmetric_min %||% NA))
   if (!is.na(rm_score) && rm_score < risk_min)       reasons <- c(reasons, sprintf("riskmetric_min=%.2f", rm_score))
+  # A candidate that cannot be expressed as an edit to a pin file is not a
+  # proposal candidate. Leaving such rows eligible let a no-op win the ranking
+  # and then abort the week, so a genuinely good candidate was never proposed:
+  # the loop looked healthy while silently proposing nothing.
+  if (!nzchar(realised_value(r))) {
+    reasons <- c(reasons, sprintf("no realised value for dimension '%s' (not actionable)",
+                                  r$dimension %||% "none"))
+  }
   list(ok = length(reasons) == 0, reasons = reasons)
 }
 
@@ -106,16 +125,26 @@ for (r in week) {
 summary_rows <- lapply(names(by_id), function(id) {
   r <- by_id[[id]]
   g <- passes_gates(r)
+  # The value the candidate actually tested. Without it a proposal has nothing
+  # to write into the pin file, so propose.R silently produced an empty edit and
+  # every candidate looked like a no-op. metrics.R records the realised value
+  # per track in the manifest fields rather than in a generic `value` column,
+  # so recover it from the dimension being varied.
+  realised <- realised_value(r)
   data.frame(
     candidate_id  = id,
     track         = r$track   %||% NA_character_,
     dimension     = r$dimension %||% NA_character_,
+    value         = as.character(realised),
     status        = r$status  %||% NA_character_,
     verdict       = r$verdict %||% NA_character_,
     pq_passed     = as.numeric(r$pq_passed %||% NA),
     pq_failed     = as.numeric(r$pq_failed %||% NA),
     tol_util      = as.numeric(r$tolerance_utilisation %||% NA),
-    pkg_churn     = as.numeric(r$package_churn %||% NA),
+    # metrics.R writes this as `delta_churn`; `package_churn` was a name that
+    # never existed, which silently produced NA and let churn drop out of the
+    # ranking entirely. Accept both so old telemetry rows still aggregate.
+    pkg_churn     = as.numeric(r$delta_churn %||% r$package_churn %||% NA),
     build_seconds = as.numeric(r$build_seconds %||% NA),
     image_size_mb = as.numeric(r$image_size_mb %||% NA),
     eligible      = g$ok,
