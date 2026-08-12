@@ -46,7 +46,11 @@ jobs:
 
       - name: Create one sibling issue per racer and assign an agent
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Not interchangeable with github.token here. The set of agents
+          # returned by suggestedActors depends on the token: GITHUB_TOKEN sees
+          # anthropic-code-agent and openai-code-agent but NOT copilot-swe-agent,
+          # so without HARNESS_BOT_TOKEN the Copilot racer silently never starts.
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           TASK: ${{ github.event.inputs.task || github.event.issue.title }}
           PARENT: ${{ github.event.issue.number }}
           RACERS: ${{ github.event.inputs.racers || 'copilot,anthropic,openai' }}
@@ -64,7 +68,15 @@ jobs:
             --jq '.data.repository.suggestedActors.nodes[] | "\(.login)\t\(.id // "")"' > /tmp/actors.tsv
           cat /tmp/actors.tsv
 
-          bot_id () { grep -m1 "^$1"$'\t' /tmp/actors.tsv | cut -f2; }
+          export HARNESS_BOT_TOKEN_SET="${{ secrets.HARNESS_BOT_TOKEN && '1' || '' }}"
+
+          # `|| true` is load-bearing. grep exits 1 when the login is absent,
+          # and under `set -e` that status propagates out of the command
+          # substitution below and kills the step -- so the "skip this racer"
+          # branch could never actually run. The race died instead of degrading.
+          bot_id () { grep -m1 "^$1"$'\t' /tmp/actors.tsv | cut -f2 || true; }
+
+          ASSIGNED=0
 
           IFS=',' read -ra LIST <<< "$RACERS"
           for racer in "${LIST[@]}"; do
@@ -78,7 +90,11 @@ jobs:
 
             BOT=$(bot_id "$LOGIN")
             if [ -z "$BOT" ]; then
-              echo "::warning::$LOGIN is not assignable on this repository; skipping this racer."
+              if [ "$LOGIN" = "copilot-swe-agent" ] && [ -z "${HARNESS_BOT_TOKEN_SET:-}" ]; then
+                echo "::warning::$LOGIN is not visible to GITHUB_TOKEN. Set the HARNESS_BOT_TOKEN secret to include the Copilot racer."
+              else
+                echo "::warning::$LOGIN is not assignable on this repository; skipping this racer."
+              fi
               continue
             fi
 
@@ -104,14 +120,23 @@ jobs:
 
             gh api graphql -f query='mutation($aid:ID!,$ids:[ID!]!){replaceActorsForAssignable(input:{assignableId:$aid,actorIds:$ids}){assignable{... on Issue{number}}}}' \
               -f aid="$ISSUE_ID" -f ids="$BOT" \
-              && echo "  assigned to $LOGIN" \
+              && { echo "  assigned to $LOGIN"; ASSIGNED=$((ASSIGNED+1)); } \
               || echo "::warning::Could not assign $LOGIN to #$NUM"
           done
+
+          # A race nobody entered is not a successful race. Without this the
+          # workflow reports green having done nothing, and the scoreboard job
+          # waits for PRs that will never arrive.
+          if [ "$ASSIGNED" -eq 0 ]; then
+            echo "::error::No racer could be assigned. Check that at least one coding agent is enabled for this repository, and set HARNESS_BOT_TOKEN to include copilot-swe-agent."
+            exit 1
+          fi
+          echo "Racers dispatched: $ASSIGNED"
 
       - name: Explain what happens next
         if: github.event_name == 'issues'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           gh issue comment "${{ github.event.issue.number }}" --body "**Agent race started.**
 
@@ -143,7 +168,7 @@ jobs:
 
       - name: Collect racer PR metrics
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p racers
@@ -162,7 +187,7 @@ jobs:
 
       - name: Rank and post the comparison
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           Rscript harness/scoreboard.R racers racers/scoreboard.md
           cat racers/scoreboard.md
