@@ -45,6 +45,36 @@ merge capability, and none invokes `gh pr merge`. AI review workflows submit
 `COMMENT`-type reviews, which by GitHub's design **cannot** satisfy an approval
 requirement — so even a compromised or misbehaving agent cannot self-approve.
 
+### Residual risk: the "create and approve pull requests" setting
+
+`build-fixtures`, `weekly-proposal` and `skills-drift` all need to *open* pull
+requests. GitHub controls that with a single repository setting —
+`can_approve_pull_request_reviews` — and, unhelpfully, the same switch governs
+both **creating** and **approving**. It cannot be split. It is enabled here,
+which means `github-actions[bot]` is technically able to submit an approving
+review.
+
+That does not open the gate, for three reasons that must all remain true:
+
+1. **`require_code_owner_review: true`.** An approval only counts if it comes
+   from a CODEOWNER. `github-actions[bot]` is not one and cannot be added to
+   `CODEOWNERS`, so its approval never satisfies the requirement.
+2. **`require_last_push_approval: true`.** The approval must come from someone
+   other than whoever pushed the last commit — so a workflow cannot push a
+   change and then bless it.
+3. **`skills-lint` fails any workflow containing an approve call.** The
+   capability exists at the platform level but is barred at the source level,
+   and that check is itself a required status check.
+
+If any one of those three is removed, this setting becomes a real hole. Treat
+them as a unit: **a PR that weakens any of the three must be rejected unless it
+also disables `can_approve_pull_request_reviews`.**
+
+The stronger alternative is to create PRs with a GitHub App installation token
+rather than `GITHUB_TOKEN`, which allows PR creation without granting approval
+at all. That is the recommended hardening step before this pattern is used on
+anything carrying real submission evidence.
+
 ## 3. Why AI reviews are still worth having
 
 AI reviewers cannot approve, but they front-load the reviewer's work: they check
