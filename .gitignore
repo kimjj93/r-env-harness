@@ -5,8 +5,12 @@
 *.Rproj
 renv/library/
 renv/staging/
-result
-result-*
+# Nix build symlinks (anchored to the repo root so they cannot swallow files
+# elsewhere -- an unanchored `result-*` was silently excluding the committed
+# baseline validation/fixtures/.../result-checksums.rds, which would have
+# disabled Layer 4 of the delta with no visible error).
+/result
+/result-*
 /artifacts/
 *.html
 !validation/report/*.html
