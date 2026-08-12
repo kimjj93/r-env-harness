@@ -28,6 +28,33 @@ ENV RENV_CONFIG_REPOS_OVERRIDE=${PPM_URL} \
     RENV_PATHS_CACHE=/renv/cache \
     DEBIAN_FRONTEND=noninteractive
 
+# Pin the BLAS thread count. This is a reproducibility control, not a
+# performance setting, and it is as load-bearing as the package pins above.
+#
+# rocker/r-ver links R against *threaded* OpenBLAS (openblas-pthread). Threaded
+# BLAS splits a reduction across threads and sums the partial results, so the
+# summation order -- and therefore the last bits of the answer -- depends on how
+# many threads it chose. That number is decided at runtime from the host CPU
+# count. It is recorded in no lockfile, no image digest and no manifest.
+#
+# Measured on this exact image digest, varying only the thread count:
+#
+#   threads=1  solve_11=3.14491662711728885843e-03  svd_1=1.02006622600000116563e+03
+#   threads=2  solve_11=3.14491662711728842475e-03  svd_1=1.02006622600000127932e+03
+#   threads=4  solve_11=3.14491662711728842475e-03  svd_1=1.02006622600000207512e+03
+#   threads=8  solve_11=3.14491662711728842475e-03  svd_1=1.02006622600000184775e+03
+#
+# Every svd_1 value differs. Same image, same BLAS, same package versions --
+# different numbers, purely from the size of the machine it ran on. An
+# environment that claims bit-for-bit reproducibility while depending on the
+# runner's core count does not have it.
+#
+# Setting this to 1 costs wall-clock time on large linear algebra. For a
+# validation environment that is the correct trade: determinism is the product.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
+
 # Fail loudly if the declared codename does not match the base image. Without
 # this the mismatch is invisible: the build still succeeds, but against packages
 # compiled for a different OS -- which is precisely the class of silent drift

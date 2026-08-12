@@ -174,12 +174,36 @@ fingerprinting: build fixtures where you can prove the hardware.
 | `agent-race` fails immediately | no agent assignable | set `HARNESS_BOT_TOKEN` |
 | Proposal PR touches only `evidence/` | should be impossible now | see §8 |
 
-The first row is the one to take seriously. "Same R, same critical packages, same
-numeric backend — different numbers" means something outside the declared
-critical set is affecting results, i.e. **the critical-package declaration is
-incomplete**. We have already seen this once: candidate `ppm-2025-07-01` failed
-two assertions at 1.42e-14 while reporting `pq_strict=20, pq_tolerant=0`. Widen
-the `@section Critical Packages:` block until the mismatch is explained.
+The first row is the one to take seriously: "same R, same critical packages,
+same recorded backend — different numbers."
+
+We saw it twice, and the first diagnosis was **wrong**, which is worth recording
+because the wrong answer was the plausible one. Candidate `ppm-2025-07-01` failed
+two assertions at 1.42e-14 with `pq_strict=20, pq_tolerant=0`, and we concluded
+the critical-package declaration must be incomplete. Then an agent race produced
+the *identical* deviation from a change that touched only the Dockerfile — no
+package moved at all. That ruled the package theory out.
+
+The real cause was **BLAS thread count**. `rocker/r-ver` links R against threaded
+OpenBLAS, which splits reductions across threads and sums the partials, so the
+last bits depend on how many threads it chose — decided at runtime from the host
+core count, and recorded in no lockfile, digest or manifest. Measured on one
+fixed image digest, varying nothing but the thread count:
+
+```
+threads=1  svd_1=1.02006622600000116563e+03
+threads=2  svd_1=1.02006622600000127932e+03
+threads=4  svd_1=1.02006622600000207512e+03
+threads=8  svd_1=1.02006622600000184775e+03
+```
+
+Every value differs. Both Dockerfiles now pin `OPENBLAS_NUM_THREADS=1`, and the
+thread count is part of the recorded backend identity — so a future unpinned
+environment is reported as an environment change rather than a numeric mystery.
+
+The general lesson generalises past BLAS: **when results move but the recorded
+environment does not, suspect something real that you are not recording yet.**
+Widening the critical-package list is one hypothesis, not the conclusion.
 
 ---
 
