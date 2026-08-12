@@ -1,0 +1,177 @@
+name: agent-race
+
+# Step 6 of the harness: more than one agent works the same problem on separate
+# branches, and the results are compared objectively before anything reaches a
+# human.
+#
+# The competition is MULTI-VENDOR. This repository has three assignable coding
+# agents (Copilot, Anthropic, OpenAI), so racers can differ in model as well as
+# in strategy. That matters: two agents from the same model with different
+# prompts tend to produce correlated answers, and correlated answers do not
+# stress-test a decision.
+#
+# Each racer gets an identical task but a DIFFERENT STRATEGY BRIEF, because an
+# unconstrained race just produces three similar PRs. Forcing "minimise churn"
+# to argue against "prefer newest" surfaces the real trade-off for the reviewer.
+#
+# This workflow never merges and never picks the winner on your behalf in any
+# binding sense -- it ranks, comments, and leaves the merge button to a human.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'The task all racers will attempt'
+        required: true
+      racers:
+        description: 'Comma-separated: copilot,anthropic,openai'
+        required: false
+        default: 'copilot,anthropic,openai'
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  fan-out:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'agent-race'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create one sibling issue per racer and assign an agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TASK: ${{ github.event.inputs.task || github.event.issue.title }}
+          PARENT: ${{ github.event.issue.number }}
+          RACERS: ${{ github.event.inputs.racers || 'copilot,anthropic,openai' }}
+        run: |
+          set -euo pipefail
+          REPO_ID=$(gh api graphql -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){id}}' \
+            -f o="${{ github.repository_owner }}" -f n="${{ github.event.repository.name }}" \
+            --jq '.data.repository.id')
+
+          # Resolve bot IDs. Availability differs per account, so a racer that
+          # cannot be assigned is skipped with a notice rather than failing the
+          # race -- a two-way race is still a race.
+          gh api graphql -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){suggestedActors(capabilities:[CAN_BE_ASSIGNED],first:20){nodes{login ... on Bot{id}}}}}' \
+            -f o="${{ github.repository_owner }}" -f n="${{ github.event.repository.name }}" \
+            --jq '.data.repository.suggestedActors.nodes[] | "\(.login)\t\(.id // "")"' > /tmp/actors.tsv
+          cat /tmp/actors.tsv
+
+          bot_id () { grep -m1 "^$1"$'\t' /tmp/actors.tsv | cut -f2; }
+
+          IFS=',' read -ra LIST <<< "$RACERS"
+          for racer in "${LIST[@]}"; do
+            racer=$(echo "$racer" | tr -d ' ')
+            case "$racer" in
+              copilot)   LOGIN=copilot-swe-agent;   STRATEGY="minimise version churn";;
+              anthropic) LOGIN=anthropic-code-agent; STRATEGY="prefer newest packages that still pass PQ";;
+              openai)    LOGIN=openai-code-agent;    STRATEGY="optimise build time and image size";;
+              *) echo "::warning::Unknown racer '$racer', skipping"; continue;;
+            esac
+
+            BOT=$(bot_id "$LOGIN")
+            if [ -z "$BOT" ]; then
+              echo "::warning::$LOGIN is not assignable on this repository; skipping this racer."
+              continue
+            fi
+
+            # Render the brief from the versioned template. Keeping it out of
+            # this file means the instructions agents receive are reviewed like
+            # any other content, and a change to them shows up in a diff.
+            PARENT_REF="${PARENT:-manual dispatch}"
+            sed -e '1,/^-->$/d' .github/agent-briefs/racer-issue.md > /tmp/body.md
+            RACER="$racer" LOGIN="$LOGIN" STRATEGY="$STRATEGY" PARENT_REF="$PARENT_REF" \
+              python3 -c 'import os,io;t=io.open("/tmp/body.md",encoding="utf-8").read();[t:=t.replace("{{"+k+"}}",os.environ[v]) for k,v in {"TASK":"TASK","STRATEGY":"STRATEGY","RACER":"RACER","LOGIN":"LOGIN","PARENT":"PARENT_REF"}.items()];io.open("/tmp/body.md","w",encoding="utf-8").write(t)'
+
+            URL=$(gh issue create \
+              --title "[race:$racer] $TASK" \
+              --body-file /tmp/body.md \
+              --label "agent-racer")
+            NUM="${URL##*/}"
+
+            echo "Created issue #$NUM for $racer ($LOGIN)"
+
+            ISSUE_ID=$(gh api graphql -f query='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){issue(number:$num){id}}}' \
+              -f o="${{ github.repository_owner }}" -f n="${{ github.event.repository.name }}" \
+              -F num="$NUM" --jq '.data.repository.issue.id')
+
+            gh api graphql -f query='mutation($aid:ID!,$ids:[ID!]!){replaceActorsForAssignable(input:{assignableId:$aid,actorIds:$ids}){assignable{... on Issue{number}}}}' \
+              -f aid="$ISSUE_ID" -f ids="$BOT" \
+              && echo "  assigned to $LOGIN" \
+              || echo "::warning::Could not assign $LOGIN to #$NUM"
+          done
+
+      - name: Explain what happens next
+        if: github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "**Agent race started.**
+
+          Sibling issues have been created and assigned to the available coding
+          agents, each with a different strategy brief. Each agent will open its
+          own branch and pull request.
+
+          When the racer PRs exist, run the \`scoreboard\` job to rank them on
+          measured metrics and post a comparison table.
+
+          Nothing merges automatically. The scoreboard ranks; you decide."
+
+  scoreboard:
+    # Ranks whatever racer PRs currently exist. Run this once the racers have
+    # reported. Kept as a separate dispatchable job because agents finish at
+    # very different times and blocking on the slowest wastes runner minutes.
+    if: github.event_name == 'workflow_dispatch'
+    needs: fan-out
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+          use-public-rspm: true
+
+      - run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+
+      - name: Collect racer PR metrics
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p racers
+          gh pr list --label agent-racer --state open --json number,title,headRefName,author \
+            > racers/prs.json
+          cat racers/prs.json
+
+          for NUM in $(python3 -c "import json;print(' '.join(str(p['number']) for p in json.load(open('racers/prs.json'))))"); do
+            RUN=$(gh run list --workflow env-validate.yml --branch "$(gh pr view $NUM --json headRefName --jq .headRefName)" \
+                    --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
+            if [ -n "$RUN" ]; then
+              gh run download "$RUN" --dir "racers/pr-$NUM" 2>/dev/null || \
+                echo "::notice::No artifacts for PR #$NUM yet"
+            fi
+          done
+
+      - name: Rank and post the comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Rscript harness/scoreboard.R racers racers/scoreboard.md
+          cat racers/scoreboard.md
+          for NUM in $(python3 -c "import json;print(' '.join(str(p['number']) for p in json.load(open('racers/prs.json'))))"); do
+            gh pr comment "$NUM" --body-file racers/scoreboard.md || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoreboard-${{ github.run_id }}
+          path: racers/
