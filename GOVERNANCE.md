@@ -201,6 +201,12 @@ Review burden is the scarcest resource in this system, so it is budgeted:
 - Research findings are batched into **exactly one** proposal PR per week — and
   none at all if nothing outperformed the incumbent.
 - Agent races auto-close losing entries, so only the winner reaches a human.
+- The learning log (`evidence/learnings.jsonl`) absorbs observations **without**
+  opening anything. `learning-promote.yml` converts one into a PR only after the
+  same lesson has been recorded twice. This is the reason the threshold exists at
+  all: promotion spends the scarce resource, so it has to be earned. A harness
+  that proposed a rule for every observation would consume more review time than
+  the environment proposals it exists to support.
 
 Target steady-state load: **one substantive review per week**, plus any
 task-driven PRs the team initiates.

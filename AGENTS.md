@@ -172,3 +172,82 @@ reasonable interpretations lead to materially different environments.
 
 A blocked task reported clearly is a success. A silently wrong environment is the
 worst possible outcome in this domain.
+
+---
+
+## 10. Record what the work taught you
+
+`evidence/learnings.jsonl` is the repository's memory of its own mistakes. The
+nightly loop learns about the *environment*; this file is how the harness learns
+about *itself*.
+
+Append an entry when something cost you real time and was not obvious from
+reading the repository first: a rule you misread, a gate that passed when it
+should not have, a platform constraint that is invisible from the configuration,
+a fallback path that turned out to be unreachable.
+
+```
+Rscript harness/learnings.R add evidence/learnings.jsonl \
+  signal_type=failure \
+  recurrence_key=some-short-slug \
+  summary='one line, specific' \
+  detail='what happened, with the measurement if there was one' \
+  root_cause='why it was possible, not just what broke' \
+  target_artifact=AGENTS.md \
+  source=pr:123
+```
+
+Four signal types, and the distinction matters because each one is fixed in a
+different place:
+
+| Type | You had to work out something that... | Fix belongs in |
+|---|---|---|
+| `context` | was true of the system but written down nowhere | a `SKILL.md` or `GOVERNANCE.md` |
+| `instruction` | this contract stated ambiguously or misleadingly | `AGENTS.md` |
+| `workflow` | concerns how the process is operated | `docs/OPERATING-MANUAL.md` |
+| `failure` | broke, and could break again the same way | wherever the guard belongs |
+
+Rules for entries:
+
+- **Record generously, promote strictly.** Writing an entry commits nobody to
+  anything. Do not self-censor a lesson because it seems small.
+- **`root_cause` must explain why the mistake was possible**, not restate the
+  symptom. "Churn was NA" is a symptom; "a missing field was read as missing
+  data rather than as an error" is a cause, and only the second generalises.
+- **Reuse an existing `recurrence_key`** when you hit a lesson already recorded.
+  That is the entire mechanism by which a repeated mistake becomes a rule.
+  Inventing a new key for the same problem hides the pattern.
+- Never delete or rewrite someone else's entry. The log is append-only.
+- Do not edit the generated block below by hand. It is produced by
+  `learning-promote.yml` running `harness/promote_learnings.R`. If a gate tells
+  you the block is out of sync, regenerate it:
+  `Rscript harness/promote_learnings.R evidence/learnings.jsonl AGENTS.md 2`
+
+### Lessons that have already recurred here
+
+<!-- BEGIN GENERATED: recurring-lessons -->
+
+Mistakes this repository has made more than once. Recorded automatically from
+`evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
+Read this before you start. These are not hypothetical.
+
+**metric-field-mismatch** — seen 2 times, affects `AGENTS.md`
+
+- aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
+- scoreboard.R read delta$package_churn; the field is delta$layer3_packages$churn _(failure, pr:22)_
+
+  Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
+
+**silent-gate-degradation** — seen 2 times, affects `skills/performance-qualification/SKILL.md`
+
+- as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
+- ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
+
+  Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
+
+Do not edit this block by hand; it is regenerated from the learning log.
+To retire a lesson, write the rule you want into section 1 and set
+`promoted` on its log entries.
+<!-- END GENERATED: recurring-lessons -->
+
+---

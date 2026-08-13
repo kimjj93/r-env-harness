@@ -152,6 +152,49 @@ by making the base digest itself a research candidate the nightly loop tracks.
 | `nightly-research.yml` | nightly cron | Explores candidate upgrades; writes to the `research/telemetry` branch | **zero** |
 | `weekly-proposal.yml` | Monday cron | Aggregates the week and opens **at most one** PR | **~1 review/week** |
 | `skills-drift.yml` | push to `main` | Detects instructions that no longer match reality | occasional |
+| `learning-promote.yml` | every PR / Monday cron | Validates the learning log; proposes a lesson for the contract once it has recurred | rare |
+
+### The repository remembers its own mistakes
+
+`skills-drift.yml` catches *mechanical* drift — a skill referencing a path that
+no longer exists. It cannot catch a rule that is present, accurate, and still
+misread every time somebody works here. That knowledge only exists in what the
+work taught us, so it is written down.
+
+`evidence/learnings.jsonl` is an append-only log of observations, classified by
+whether the gap was **context**, **instruction**, **workflow**, or **failure**
+(the four signal types from Martin Fowler's [feedback flywheel][ff]). Agents are
+instructed to append to it (`AGENTS.md` §10); it costs one command.
+
+Recording is cheap on purpose. **Promotion is not.** `learning-promote.yml`
+surfaces a lesson in `AGENTS.md` only once it has been recorded **twice**, on the
+reasoning that one occurrence is an anecdote and two in different places is a
+property of how this repository is built. Without that threshold the contract
+grows until agents skim it, and a skimmed contract governs nothing.
+
+The seeded log already contains two lessons that recurred during construction —
+the same metric field-name mismatch made in two different scripts, and two gates
+that degraded silently rather than failing.
+
+[ff]: https://martinfowler.com/articles/reduce-friction-ai/feedback-flywheel.html
+
+### Measuring the agents, not just the environment
+
+The 26 telemetry fields per research run all describe the *environment*. None of
+them says whether an agent reading `AGENTS.md` could do the job.
+`harness/agent_metrics.R` closes that gap from data the repository already
+produces, and reports it in the weekly proposal:
+
+- **first-pass acceptance** — share of PRs whose *first* gate run passed
+- **iteration cycles** — gate runs needed before the first green
+- **never green** — opened, iterated, still failing
+
+Human-authored PRs are measured alongside as a control: if agents need three
+attempts where humans need one, the contract is underspecified; if both need
+three, the gate is flaky and rewriting the contract would treat the wrong cause.
+
+Deliberately **not** measured: lines changed, commits, time to first push. Volume
+is not the constraint here — review capacity is.
 
 ### The research loop is the autopilot
 
