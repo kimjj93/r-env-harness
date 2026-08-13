@@ -152,8 +152,18 @@ do_add <- function(path, kv) {
   }
   rec$timestamp <- rec$timestamp %||% format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
   if (is.null(rec$id)) {
-    n <- length(read_learnings(path))
-    rec$id <- sprintf("L-%04d", n + 1)
+    # Allocate from the highest id present, not from the row count. Counting
+    # rows produces a colliding id the moment the log has any gap in it, which
+    # is exactly what a renumber after a merge conflict leaves behind.
+    #
+    # This does not make ids unique across concurrent branches -- nothing that
+    # reads only the current branch can. The validator rejects duplicates, so a
+    # collision is a rebase to resolve rather than a corrupted log, and
+    # `recurrence_key` is what the harness actually groups on.
+    existing <- vapply(read_learnings(path), function(e) e$id %||% "", "")
+    nums <- suppressWarnings(as.integer(sub("^L-", "", existing)))
+    nums <- nums[!is.na(nums)]
+    rec$id <- sprintf("L-%04d", if (length(nums)) max(nums) + 1L else 1L)
   }
   if (!"promoted" %in% names(rec)) rec$promoted <- NULL
 

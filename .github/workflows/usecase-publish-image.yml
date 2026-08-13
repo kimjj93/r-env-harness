@@ -72,6 +72,7 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Sign the image (keyless)
+        id: sign
         run: |
           set -euo pipefail
           # Keyless OIDC signing: provenance without key management.
@@ -86,7 +87,38 @@ jobs:
           artifact-name: sbom-renv.spdx.json
           output-file: sbom-renv.spdx.json
 
+      # Build provenance attestation is unavailable on user-owned private
+      # repositories. It failed here, and because it failed the three steps
+      # after it were skipped: the manifest extract, the PQ run against the
+      # published image, and the evidence ledger append.
+      #
+      # The image had already been built, pushed and signed by then. So the
+      # publish left behind an image that is in the registry and in use, with
+      # no manifest, no qualification evidence and no ledger entry -- the one
+      # artefact anybody would actually pull was the only one never validated.
+      # A partial failure left a worse state than a total failure would have.
+      #
+      # Capability is now checked rather than assumed, and the gap is recorded
+      # as a fact in the ledger instead of taking the evidence trail down with
+      # it.
+      - name: Check attestation capability
+        id: attestcap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VIS=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)
+          echo "visibility=$VIS" >> "$GITHUB_OUTPUT"
+          if [ "$VIS" = "public" ]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Build provenance attestation is not available for user-owned private repositories. The image is signed with cosign, but no provenance attestation will exist for this digest. Make the repository public to enable it."
+          fi
+
       - name: Attest build provenance
+        id: attest
+        if: steps.attestcap.outputs.supported == 'true'
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ${{ env.IMAGE_BASE }}/renv
@@ -106,8 +138,19 @@ jobs:
           cp "evidence/manifests/renv-${{ github.sha }}.json" \
              "evidence/manifests/renv-latest.json"
 
+      # Deliberately NOT continue-on-error. This is qualification evidence for
+      # the exact bits that were published; if it fails, the publish is not
+      # successful in any sense worth reporting. It was marked
+      # continue-on-error, which meant a published image could fail its own
+      # qualification and the run would still be green.
+      #
+      # The image is already in the registry by this point, which sounds worse
+      # than it is: the ledger append comes AFTER this step, so an image that
+      # fails its own PQ never becomes `current` in images.lock.json and is
+      # never blessed as the accepted environment. The tag exists; the evidence
+      # that would let anyone rely on it does not. That ordering is load-
+      # bearing -- do not move the ledger append above this step.
       - name: Run PQ inside the published image and archive results
-        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p artifacts evidence/metrics
@@ -125,6 +168,9 @@ jobs:
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
           BASE_DIGEST: sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
           LEDGER_BRANCH: evidence/images
+          SIGNED: ${{ steps.sign.outcome == 'success' && 'true' || 'false' }}
+          ATTESTED: ${{ steps.attest.outcome == 'success' && 'true' || 'false' }}
+          VISIBILITY: ${{ steps.attestcap.outputs.visibility }}
         run: |
           set -euo pipefail
           # The digest lock is the bridge between "the code we reviewed" and
@@ -175,7 +221,16 @@ jobs:
                   "digest": os.environ["DIGEST"],
                   "ppm_snapshot": os.environ["SNAPSHOT"],
                   "base_digest": os.environ["BASE_DIGEST"],
-                  "signed": True,
+                  # Recorded as observed, not asserted. "signed": True was
+                  # hardcoded, so the ledger would have claimed a signature
+                  # whether or not one existed.
+                  "signed": os.environ.get("SIGNED") == "true",
+                  "provenance_attested": os.environ.get("ATTESTED") == "true",
+                  "attestation_note": (
+                      "" if os.environ.get("ATTESTED") == "true"
+                      else "provenance attestation unavailable: repository visibility is "
+                           + os.environ.get("VISIBILITY", "unknown")
+                  ),
               }
           }
           data["current"] = sha
@@ -209,6 +264,11 @@ jobs:
             echo "| commit | \`${{ github.sha }}\` |"
             echo "| PPM snapshot | ${{ steps.pin.outputs.snapshot }} |"
             echo "| signed | cosign keyless |"
+            if [ "${{ steps.attestcap.outputs.supported }}" = "true" ]; then
+              echo "| provenance | attested |"
+            else
+              echo "| provenance | **not attested** (repo is ${{ steps.attestcap.outputs.visibility }}; feature needs a public repo) |"
+            fi
             echo ""
             echo "Pull by digest (immutable):"
             echo '```'
