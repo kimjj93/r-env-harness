@@ -202,7 +202,12 @@ jobs:
           done
           docker rm -f "$CID" >/dev/null
           find imagelib -maxdepth 2 -type d | head -5
-          echo "packages copied: $(find imagelib -maxdepth 2 -name DESCRIPTION | wc -l)"
+          COPIED=$(find imagelib -maxdepth 3 -name DESCRIPTION | wc -l)
+          echo "packages copied: $COPIED"
+          if [ "$COPIED" -eq 0 ]; then
+            echo "::error::No packages were copied out of the image; the risk scan would silently fall back to CRAN metadata."
+            exit 1
+          fi
 
       - name: Package risk scan
         run: |

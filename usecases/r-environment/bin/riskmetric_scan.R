@@ -53,20 +53,31 @@ if (!length(new_pkgs)) {
 message("Scanning ", length(new_pkgs), " new package(s): ",
         paste(new_pkgs, collapse = ", "))
 
-# Put the image's library FIRST so a package present both there and on the
-# runner is assessed as the image installed it.
+# Resolve each package to its directory INSIDE the image's library and assess
+# that path directly.
+#
+# The obvious approach -- prepending the image library to .libPaths() -- was
+# tried and is wrong: the image ships base R packages, so prepending it shadows
+# the runner's own base library and riskmetric then fails to load at all. The
+# scan reported "riskmetric unavailable" for all 78 packages and the check
+# still went green.
+#
+# Using explicit paths keeps the runner's R intact and, more importantly, gives
+# every package the SAME kind of reference. Mixing installed refs and remote
+# refs in one table produced scores that were not comparable to each other.
+image_pkg_dir <- function(p) ""
 if (nzchar(image_lib) && dir.exists(image_lib)) {
   libs <- list.dirs(image_lib, recursive = TRUE, full.names = TRUE)
-  # A directory counts as a library only if it holds an installed package,
-  # i.e. <dir>/<pkg>/DESCRIPTION. Testing for the package directory alone also
-  # matched things like <pkg>/include, which are not libraries and would be
-  # prepended to the search path for no reason.
   libs <- libs[vapply(libs, function(d) {
     any(file.exists(file.path(d, new_pkgs, "DESCRIPTION")))
   }, logical(1))]
   if (length(libs)) {
-    .libPaths(c(libs, .libPaths()))
-    message("Assessing against image library: ", paste(libs, collapse = ", "))
+    message("Image libraries found: ", paste(libs, collapse = ", "))
+    image_pkg_dir <- function(p) {
+      hit <- file.path(libs, p)
+      hit <- hit[file.exists(file.path(hit, "DESCRIPTION"))]
+      if (length(hit)) hit[[1]] else ""
+    }
   } else {
     message("WARNING: image library given but no scanned package found in it: ", image_lib)
   }
@@ -85,8 +96,27 @@ if (!requireNamespace("riskmetric", quietly = TRUE)) {
   quit(status = 0L, save = "no")
 }
 
-rows <- list()
+# Packages with `Priority: base` ship with R itself. Scoring them for community
+# trust signals -- bug tracker, source control, download counts -- measures the
+# absence of things base R has no reason to have, and would have reported R's
+# own components as the highest supply-chain risk in the environment. They are
+# not a package choice this repository makes, so they are listed and skipped.
+base_pkgs <- character(0)
 for (p in new_pkgs) {
+  d <- image_pkg_dir(p)
+  if (!nzchar(d)) next
+  pri <- tryCatch(read.dcf(file.path(d, "DESCRIPTION"), fields = "Priority")[[1]],
+                  error = function(e) NA_character_)
+  if (!is.na(pri) && identical(trimws(pri), "base")) base_pkgs <- c(base_pkgs, p)
+}
+scan_pkgs <- setdiff(new_pkgs, base_pkgs)
+if (length(base_pkgs)) {
+  message("Skipping ", length(base_pkgs), " base-priority package(s): ",
+          paste(base_pkgs, collapse = ", "))
+}
+
+rows <- list()
+for (p in scan_pkgs) {
   res <- tryCatch({
     # This runs on the CI runner rather than inside the validated image, so a
     # scanned package is usually NOT installed here. Let riskmetric resolve it
@@ -96,9 +126,10 @@ for (p in new_pkgs) {
     # invisible cannot be compared across runs: the same package assessed as an
     # installed library and as a remote CRAN entry gets materially different
     # numbers, and without the source recorded the difference looks like drift.
-    src <- if (nzchar(find.package(p, quiet = TRUE)[1] %||% "")) "installed" else "cran_remote"
-    ref <- if (src == "installed") riskmetric::pkg_ref(p, source = "pkg_install")
-           else riskmetric::pkg_ref(p, source = "pkg_cran_remote")
+    pdir <- image_pkg_dir(p)
+    src  <- if (nzchar(pdir)) "image" else "cran_remote"
+    ref  <- if (src == "image") riskmetric::pkg_ref(pdir)
+            else riskmetric::pkg_ref(p, source = "pkg_cran_remote")
     sc  <- riskmetric::pkg_score(riskmetric::pkg_assess(ref))
 
     # summarize_scores() is the documented way to collapse the assessment
@@ -123,7 +154,7 @@ for (p in new_pkgs) {
     }
     list(package = p, score = score,
          weak = if (length(weak)) paste(weak, collapse = ", ") else "",
-         note = if (src == "installed") "" else "scored from CRAN metadata only")
+         note = if (src == "image") "" else "not in image library; scored from CRAN metadata only")
   }, error = function(e) {
     list(package = p, score = NA_real_, weak = "",
          note = paste("assessment failed:", conditionMessage(e)))
@@ -149,6 +180,11 @@ md <- c("### Package risk (newly added)", "",
           ifelse(nzchar(r$weak), r$weak, "-"),
           ifelse(nzchar(r$note), r$note, "-")), character(1)),
         "",
+        "",
+        if (length(base_pkgs))
+          sprintf("> Skipped %d base-priority package(s) that ship with R itself: %s",
+                  length(base_pkgs), paste(sprintf("`%s`", base_pkgs), collapse = ", "))
+        else "",
         "",
         "> **Higher score = higher risk.** `summarize_scores()` returns a risk score,",
         "> so 0.42 is better than 0.69. Verified against known packages.",

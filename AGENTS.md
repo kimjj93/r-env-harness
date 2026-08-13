@@ -267,13 +267,14 @@ Mistakes this repository has made more than once. Recorded automatically from
 `evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
 Read this before you start. These are not hypothetical.
 
-**silent-gate-degradation** — seen 5 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
+**silent-gate-degradation** — seen 6 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
 
 - as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
 - A declared research gate whose field is never measured was skipped, not failed _(failure, pr:29)_
 - The gates block was parsed with a fixed indent width the manifest did not use _(failure, pr:29)_
 - continue-on-error made the risk scan report success while scoring nothing _(workflow, pr:29)_
+- The riskmetric-unavailable branch exited 0, so the check went green while scoring nothing _(failure, pr:29)_
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 
@@ -285,19 +286,20 @@ Read this before you start. These are not hypothetical.
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
 
+**unverified-external-semantics** — seen 3 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
+
+- The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
+- Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
+- Prepending the image library to .libPaths() shadowed the runner's base R and broke the scanner _(failure, pr:29)_
+
+  Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
+
 **untested-rare-path** — seen 2 times, affects `AGENTS.md`
 
 - Under set -e a helper ending in grep killed the step before its fallback could run _(failure, pr:8)_
 - The promotion PR step would have failed on a label that did not exist _(failure, pr:22)_
 
   Common cause: A fallback path that was never exercised, because reaching it required the failure that prevented it running.
-
-**unverified-external-semantics** — seen 2 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
-
-- The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
-- Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
-
-  Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
 
 Do not edit this block by hand; it is regenerated from the learning log.
 To retire a lesson, write the rule you want into section 1 and set
