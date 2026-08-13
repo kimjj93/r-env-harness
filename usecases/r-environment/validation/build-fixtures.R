@@ -22,9 +22,9 @@ local({
   root <- if (length(f)) dirname(dirname(normalizePath(f[1]))) else getwd()
   source(file.path(root, "validation", "R", "helper_compare-reference.R"))
 })
-source(harness_path("validation/R/testcase_adsl.R"))
-source(harness_path("validation/R/testcase_adae.R"))
-source(harness_path("validation/R/testcase_numeric.R"))
+source(usecase_path("validation/R/testcase_adsl.R"))
+source(usecase_path("validation/R/testcase_adae.R"))
+source(usecase_path("validation/R/testcase_numeric.R"))
 
 out_dir <- fixture_dir()
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -52,13 +52,13 @@ build_one <- function(name, generator, source_file) {
 }
 
 build_one("adsl_summary", testcase_generate_adsl_summary,
-          harness_path("validation/R/testcase_adsl.R"))
+          usecase_path("validation/R/testcase_adsl.R"))
 build_one("adae_summary", testcase_generate_adae_summary,
-          harness_path("validation/R/testcase_adae.R"))
+          usecase_path("validation/R/testcase_adae.R"))
 build_one("rng_kinds", testcase_generate_rng_kinds,
-          harness_path("validation/R/testcase_numeric.R"))
+          usecase_path("validation/R/testcase_numeric.R"))
 build_one("linalg", testcase_generate_linalg,
-          harness_path("validation/R/testcase_numeric.R"))
+          usecase_path("validation/R/testcase_numeric.R"))
 
 # Result checksums feed Layer 4 of the delta report.
 checksums <- list(

@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# delta <variant> [baseline-sha] — compare this state against a baseline.
+#
+# Implements the `delta` capability. Wraps the four-layer image delta and
+# translates its output into the harness verdict vocabulary.
+#
+# The baseline is the MERGE BASE, not whatever main happens to be right now.
+# Comparing against a moving main attributes other people's changes to this PR.
+#
+# Writes:
+#   evidence/delta/<variant>-verdict.json   machine verdict
+#   evidence/delta/<variant>-delta.md       what a reviewer reads
+#   evidence/metrics/metrics.jsonl          appended history
+
+set -euo pipefail
+
+VARIANT="${1:?usage: delta <variant> [baseline-sha]}"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT"
+
+TAG="r-env-harness/${VARIANT}:${GITHUB_SHA:-local}"
+OUT="evidence/delta"
+WORK="$(mktemp -d)"
+mkdir -p "$OUT" evidence/metrics evidence/manifests
+trap 'rm -rf "$WORK"' EXIT
+
+# Resolve the baseline.
+BASE_SHA="${2:-}"
+if [ -z "$BASE_SHA" ]; then
+  if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+    BASE_SHA=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null || echo "")
+  else
+    BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+  fi
+fi
+echo "Baseline: ${BASE_SHA:-none (this run establishes one)}"
+
+# Current manifest, extracted from inside the image.
+mkdir -p "$WORK/current" "$WORK/baseline"
+docker run --rm \
+  -e HARNESS_TRACK="$VARIANT" \
+  -v "$WORK/current:/out" \
+  "$TAG" \
+  Rscript /project/usecases/r-environment/bin/image_manifest.R /out/manifest.json
+
+BASELINE_FOUND=false
+if [ -n "$BASE_SHA" ]; then
+  for p in "evidence/manifests/${VARIANT}-latest.json" ; do
+    if git cat-file -e "${BASE_SHA}:${p}" 2>/dev/null; then
+      git show "${BASE_SHA}:${p}" > "$WORK/baseline/manifest.json"
+      BASELINE_FOUND=true
+    fi
+  done
+  if git cat-file -e "${BASE_SHA}:evidence/qualify/${VARIANT}-qualify.json" 2>/dev/null; then
+    git show "${BASE_SHA}:evidence/qualify/${VARIANT}-qualify.json" > "$WORK/baseline/qualify.json"
+  fi
+fi
+
+set +e
+Rscript usecases/r-environment/bin/image_delta.R \
+  --current  "$WORK/current/manifest.json" \
+  --baseline "$WORK/baseline/manifest.json" \
+  --qualify  "evidence/qualify/${VARIANT}-qualify.json" \
+  --variant  "$VARIANT" \
+  --out-md   "$OUT/${VARIANT}-delta.md" \
+  --out-json "$WORK/delta.json"
+DELTA_STATUS=$?
+set -e
+
+cp "$WORK/current/manifest.json" "evidence/manifests/${VARIANT}-latest.json"
+
+python3 - "$VARIANT" "$OUT" "$WORK" "${BASE_SHA:-none}" "$BASELINE_FOUND" <<'PY'
+import json, os, sys, datetime
+
+variant, out, work, base, found = sys.argv[1:6]
+
+def load(p):
+    try: return json.load(open(p))
+    except Exception: return {}
+
+delta   = load(os.path.join(work, "delta.json"))
+qualify = load(os.path.join("evidence/qualify", f"{variant}-qualify.json"))
+build   = load(os.path.join("evidence/build",   f"{variant}-build.json"))
+
+failed = qualify.get("checks_failed") or 0
+verdict = delta.get("verdict")
+if not verdict:
+    if found != "True":
+        verdict = "PASS_EXPLAINED" if failed == 0 else "FAIL_DEVIATION"
+    else:
+        verdict = "FAIL_DEVIATION" if failed else "PASS_IDENTICAL"
+# A qualification failure outranks any delta opinion: if the environment cannot
+# reproduce its own references, how much it changed is beside the point.
+if failed and not verdict.startswith("FAIL"):
+    verdict = "FAIL_DEVIATION"
+
+summary = delta.get("summary") or (
+    f"{qualify.get('checks_passed', 0)} checks passed, {failed} failed"
+    + ("" if found == "True" else "; no baseline to compare against yet"))
+
+json.dump({
+    "variant": variant,
+    "verdict": verdict,
+    "baseline": base,
+    "summary": summary,
+    "report_path": f"evidence/delta/{variant}-delta.md",
+}, open(os.path.join(out, f"{variant}-verdict.json"), "w"), indent=2)
+
+row = {
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "commit": os.environ.get("GITHUB_SHA", "local"),
+    "variant": variant,
+    "verdict": verdict,
+    "checks_passed": qualify.get("checks_passed"),
+    "checks_failed": failed,
+    "margin_utilisation": qualify.get("margin_utilisation"),
+    "change_magnitude": delta.get("change_magnitude", delta.get("package_churn")),
+    "cost_seconds": (build.get("cost_seconds") or 0) + (qualify.get("cost_seconds") or 0),
+    "artifact_size_mb": build.get("artifact_size_mb"),
+    "dimension": os.environ.get("RESEARCH_DIMENSION", "none"),
+    "candidate_id": os.environ.get("RESEARCH_CANDIDATE", "adhoc"),
+}
+with open("evidence/metrics/metrics.jsonl", "a") as fh:
+    fh.write(json.dumps(row) + "\n")
+
+print(f"{variant}: {verdict} — {summary}")
+PY
+
+VERDICT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['verdict'])" \
+          "$OUT/${VARIANT}-verdict.json")
+case "$VERDICT" in
+  FAIL_*) exit 1 ;;
+  *)      exit 0 ;;
+esac

@@ -166,7 +166,7 @@ if (length(ranked) >= 2) {
   if (!is.na(w$churn) && !is.na(s$churn) && !is.na(w$build_s) && !is.na(s$build_s) &&
       w$build_s > s$build_s) {
     L <- c(L, sprintf(
-      "Note the trade-off the race exposed: #%s wins on stability and churn but is %s s slower to build than #%s. If build time matters more to you than review surface, the ranking policy -- not the evidence -- is what you disagree with, and that policy is editable in `harness/research/candidates.yml`.",
+      "Note the trade-off the race exposed: #%s wins on stability and churn but is %s s slower to build than #%s. If build time matters more to you than review surface, the ranking policy -- not the evidence -- is what you disagree with, and that policy is editable in the use case's candidate policy.",
       w$number, fmt(w$build_s - s$build_s, 0), s$number), "")
   }
 }

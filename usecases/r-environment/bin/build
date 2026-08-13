@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# build <variant> — materialise a candidate R environment as a container image.
+#
+# Implements the `build` capability declared in harness.yml. The harness does
+# not know this produces a container; it knows only that this command exits 0
+# and writes evidence/build/<variant>-build.json.
+#
+# Overridable pins let the research loop vary one dimension at a time:
+#   PPM_SNAPSHOT   Track A: dated Posit Package Manager snapshot
+#   NIXPKGS_DATE   Track B: dated rstats-on-nix tarball
+
+set -euo pipefail
+
+VARIANT="${1:?usage: build <variant>}"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT"
+
+TAG="r-env-harness/${VARIANT}:${GITHUB_SHA:-local}"
+OUT="evidence/build"
+mkdir -p "$OUT"
+
+case "$VARIANT" in
+  renv)
+    DOCKERFILE="usecases/r-environment/env/renv/Dockerfile"
+    PIN="${PPM_SNAPSHOT:-$(grep '^PPM_SNAPSHOT=' usecases/r-environment/env/renv/ppm-snapshot.txt | cut -d= -f2)}"
+    BUILD_ARGS=(--build-arg "PPM_SNAPSHOT=${PIN}")
+    ;;
+  nix)
+    DOCKERFILE="usecases/r-environment/env/nix/Dockerfile.nix"
+    PIN="${NIXPKGS_DATE:-$(grep '^NIXPKGS_DATE=' usecases/r-environment/env/nix/nixpkgs-pin.txt | cut -d= -f2)}"
+    BUILD_ARGS=(--build-arg "NIXPKGS_DATE=${PIN}")
+    ;;
+  *)
+    echo "::error::unknown variant: $VARIANT" >&2; exit 2 ;;
+esac
+
+echo "Building $VARIANT from $DOCKERFILE (pin: $PIN)"
+
+START=$(date +%s)
+docker build \
+  --file "$DOCKERFILE" \
+  "${BUILD_ARGS[@]}" \
+  --tag "$TAG" \
+  --progress plain \
+  . 
+STATUS=$?
+END=$(date +%s)
+
+SIZE_BYTES=$(docker image inspect "$TAG" --format='{{.Size}}' 2>/dev/null || echo 0)
+
+cat > "$OUT/${VARIANT}-build.json" <<JSON
+{
+  "variant": "${VARIANT}",
+  "tag": "${TAG}",
+  "pin": "${PIN}",
+  "cost_seconds": $((END - START)),
+  "artifact_size_mb": $((SIZE_BYTES / 1024 / 1024)),
+  "status": ${STATUS}
+}
+JSON
+
+echo "Built $TAG in $((END - START))s, $((SIZE_BYTES / 1024 / 1024)) MB"
+exit $STATUS

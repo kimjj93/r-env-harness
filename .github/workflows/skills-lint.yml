@@ -30,8 +30,17 @@ jobs:
       - name: SKILL.md files have required frontmatter
         run: |
           set -euo pipefail
+          python3 -m pip install --quiet pyyaml
           fail=0
-          for f in skills/*/SKILL.md; do
+          # A SKILL.md is how an agent decides what to do, so the shape of one
+          # is a harness rule and applies to every skill in the repository --
+          # including the use case's own. The use case root comes from the
+          # manifest rather than a literal path: this step must not know which
+          # domain it is linting, only that skills must be well formed.
+          UC_ROOT=$(./harness/usecase root)
+          SKILLS=$(find skills "$UC_ROOT/skills" -name SKILL.md 2>/dev/null | sort)
+          [ -n "$SKILLS" ] || { echo "::error::no SKILL.md files found at all"; exit 1; }
+          for f in $SKILLS; do
             echo "--- $f"
             if [ "$(head -1 "$f")" != "---" ]; then
               echo "::error file=$f::missing YAML frontmatter opening delimiter"; fail=1; continue
@@ -80,34 +89,10 @@ jobs:
           done
           exit $fail
 
-      - name: Generated files are not hand-edited
+      - name: Harness / use case boundary
         run: |
-          set -euo pipefail
-          fail=0
-          grep -q 'GENERATED FILE' env/nix/default.nix || {
-            echo "::error::env/nix/default.nix lost its generated-file banner"; fail=1; }
-          grep -q 'GENERATED' env/nix/.Rprofile || {
-            echo "::error::env/nix/.Rprofile lost its generated-file banner"; fail=1; }
-          exit $fail
-
-      - name: No floating version pins
-        run: |
-          set -euo pipefail
-          fail=0
-          # A floating tag silently changes the environment underneath you,
-          # which defeats the entire purpose of this repository.
-          if grep -rnE '^FROM [^ ]+:latest' env/ 2>/dev/null; then
-            echo "::error::floating ':latest' base image found"; fail=1
-          fi
-          for df in env/renv/Dockerfile env/nix/Dockerfile.nix; do
-            while read -r line; do
-              case "$line" in
-                *"@sha256:"*) ;;
-                *) echo "::error file=$df::base image not pinned by digest: $line"; fail=1 ;;
-              esac
-            done < <(grep '^FROM ' "$df")
-          done
-          exit $fail
+          python3 -m pip install --quiet pyyaml
+          ./harness/check_boundary
 
       - name: Non-negotiable rules are intact
         run: |
@@ -167,12 +152,13 @@ jobs:
           done < <(find .github/workflows -name '*.yml')
           exit $fail
 
-      - name: R scripts parse
+      # Language-specific syntax checking belongs to whoever owns the language.
+      # This job checks only what every repository has: shell and YAML.
+      - name: Shell scripts parse
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq r-base-core >/dev/null
           fail=0
           while read -r f; do
-            Rscript -e "tryCatch({parse('$f'); cat('ok  $f\n')}, error=function(e){cat('FAIL $f:', conditionMessage(e), '\n'); quit(status=1)})" || fail=1
-          done < <(find harness validation analysis env -name '*.R')
+            bash -n "$f" && echo "ok   $f" || { echo "FAIL $f"; fail=1; }
+          done < <(grep -rl '^#!/usr/bin/env bash' harness tools 2>/dev/null)
           exit $fail

@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Emit one metrics row per harness run.
 #
-#   Rscript harness/metrics.R <outdir>
+#   Rscript usecases/r-environment/bin/metrics.R <outdir>
 #
 # Reads whatever artifacts exist and produces a single append-only JSON line.
 # This file is the evidence base for every claim the weekly proposal makes —

@@ -1,13 +1,64 @@
 # r-env-harness
 
-**Harness Engineering for Statistical Programming** — a working reference
-implementation of a human-in-the-loop, agent-driven workflow for building
-**reproducible, validated R environments** with the evidence trail a regulated
-submission requires.
+**Harness Engineering for Statistical Programming** — a general-purpose,
+human-in-the-loop, agent-driven workflow, plus one worked example that proves
+it does something real.
 
 The premise: AI agents do the work autonomously on branches, an unattended
 research loop fine-tunes proposals in the background using measured metrics,
 and a human only ever has to do one thing — **approve or deny a pull request**.
+
+---
+
+## Two layers, and the seam between them
+
+This repository is deliberately **two things**, and they are separated by a gate
+rather than by good intentions.
+
+| Layer | What it is | Where it lives |
+|---|---|---|
+| **The harness** | The reusable part: governance, PR gates, the agent race, AI review, the research loop, the learning log, the evidence schema | repository root |
+| **The use case** | One worked example: reproducible R environments for regulatory submission | `usecases/r-environment/` |
+
+The seam is a single file, `harness.yml`, which declares what the harness is
+governing and the five commands it may invoke. **The harness never reads inside
+the use case directory.** It asks.
+
+```yaml
+capabilities:
+  build:       # materialise a candidate state
+  qualify:     # prove it correct -> JUnit + metrics
+  delta:       # compare against a baseline -> reviewable report + verdict
+  candidates:  # what the research loop may vary
+  apply:       # write a winning candidate into the repo
+```
+
+Implement those five for your domain and the entire harness works on it
+unchanged — the race, the nightly research loop, the weekly proposal, the
+scoreboard, the learning log.
+
+```bash
+./tools/extract-template.sh ../my-harness   # scaffold + stub, verified on the way out
+cd ../my-harness && ./harness/check_boundary
+```
+
+### Why there is a gate and not just a convention
+
+A documented separation lasts about three pull requests. Someone adds a domain
+path to a scaffold workflow because it is the quickest way to make something
+work, it looks like every other line in review, and six months later the
+"portable" harness only builds R containers.
+
+So `harness/check_boundary` runs on every PR and fails the build if a harness
+file names a use case path or a domain tool. When it was first switched on it
+found **50 violations** in code that had been written as though the separation
+already existed. That is the number that justifies the gate.
+
+It also prints, without failing, what the harness itself needs installed —
+currently `bash`, `python3` and `Rscript`. The `Rscript` is a genuine wart: the
+harness's own tooling is written in R, so a Python or SAS team adopting the
+scaffold inherits a dependency they do not want. Reported rather than hidden;
+see *Honest limitations*.
 
 ---
 
@@ -283,17 +334,34 @@ agent-opened PRs by hand, and `agent-race` will refuse to run.
 ## Repository map
 
 ```
-AGENTS.md              the contract every agent reads — start here
-GOVERNANCE.md          who may merge, and what AI may never do
-skills/                vendor-neutral capability specs (SKILL.md)
-env/renv/              Track A: lockfile, digest-pinned Dockerfile, PPM pin
-env/nix/               Track B: rix generator, default.nix, Nix image
-env/images/            images.lock.json — the APPROVED pin (ledger: evidence/images)
-analysis/              the ADaM payload (ADSL, ADAE)
-validation/            three-phase PQ framework, fixtures, testcases
-harness/               delta engine, manifests, metrics, scoreboard
-harness/research/      candidates.yml, aggregate.R, propose.R
-evidence/              committed audit trail: metrics, manifests, proposals
+── the harness (portable; this is what extract-template.sh lifts out) ─────────
+AGENTS.md                     the contract every agent reads — start here
+GOVERNANCE.md                 who may merge, and what AI may never do
+harness.yml                   THE SEAM — declares the use case and its verbs
+harness/usecase               the dispatcher; the only reader of harness.yml
+harness/check_boundary        fails CI if the harness learns about the domain
+harness/scoreboard.R          ranks competing agents on evidence, not prose
+harness/research/             aggregate.R, propose.R — the autopilot's brain
+skills/                       harness skills (research-loop)
+docs/schema/evidence.md       the vocabulary every use case reports in
+tools/extract-template.sh     lift the harness out, verified on the way out
+.github/workflows/*.yml       scaffold gates (no `usecase-` prefix)
+
+── the use case (swappable; one worked example) ───────────────────────────────
+usecases/r-environment/
+  AGENTS.md                   domain rules, additional to the root contract
+  bin/                        the five capability adapters
+  env/renv/                   Track A: lockfile, digest-pinned Dockerfile, PPM pin
+  env/nix/                    Track B: rix generator, default.nix, Nix image
+  env/images/                 images.lock.json — the APPROVED pin
+  analysis/                   the ADaM payload (ADSL, ADAE)
+  validation/                 three-phase PQ framework, fixtures, testcases
+  skills/                     domain skills (env-delta, PQ, package-risk, ...)
+  candidates.yml              what the research loop may vary
+.github/workflows/usecase-*   domain gates (build, publish, fixtures, lint)
+
+── produced, not authored ─────────────────────────────────────────────────────
+evidence/                     committed audit trail: metrics, verdicts, learnings
 ```
 
 ---
@@ -309,6 +377,13 @@ evidence/              committed audit trail: metrics, manifests, proposals
   unavailable in nixpkgs; those candidates are recorded as `unsupported` rather
   than worked around.
 - **Nix builds are slow without the `rstats-on-nix` Cachix cache.**
+- **The harness's own tooling is written in R.** `check_boundary` reports this
+  on every run. It is a portability wart, not a coupling: the harness does not
+  *know* anything about R environments, it merely happens to be implemented in
+  R. A non-R team adopting the scaffold still has to install R to run the
+  scoreboard and the research aggregator. Porting that tooling to Python is
+  tracked as follow-up work; it is deliberately not bundled into the
+  restructuring PR, because a change that large is a change nobody reviews.
 - **Agent availability varies by account and plan.** A racer that cannot be
   assigned is skipped with a warning; a two-way race is still a race.
 - **`{riskmetric}` is being succeeded by `{val.meter}`** by the R Validation

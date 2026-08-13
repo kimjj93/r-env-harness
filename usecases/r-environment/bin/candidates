@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# candidates — declare what the research loop is allowed to vary.
+#
+# Implements the `candidates` capability. Emits a JSON array on stdout; the
+# harness fans out over it and never invents a dimension of its own. That
+# restraint is deliberate: an autonomous loop that can choose its own variables
+# will eventually vary something nobody agreed it should touch.
+#
+# Each object:
+#   id         stable identifier, appears in metrics.jsonl as candidate_id
+#   variant    which variant this applies to
+#   dimension  the single thing being varied
+#   value      what to vary it to
+#   env        environment variables to set when building
+#   rationale  why it is worth an experiment
+#
+# ONE dimension per candidate. Two simultaneous changes produce a delta nobody
+# can attribute, which defeats the purpose of running the experiment.
+
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+
+python3 - "$ROOT/usecases/r-environment/candidates.yml" <<'PY'
+import json, sys, yaml
+
+spec = yaml.safe_load(open(sys.argv[1])) or {}
+
+# Which environment variable carries each dimension into `build`.
+ENV_FOR = {
+    "ppm_snapshot": "PPM_SNAPSHOT",
+    "nixpkgs_date": "NIXPKGS_DATE",
+    "base_digest":  "BASE_IMAGE",
+}
+
+out = []
+for c in spec.get("candidates") or []:
+    dim = c.get("dimension")
+    var = ENV_FOR.get(dim)
+    if not var:
+        print(f"::warning::candidate {c.get('id')} declares dimension "
+              f"'{dim}' with no build variable; skipping", file=sys.stderr)
+        continue
+    out.append({
+        "id": c["id"],
+        # `track` is this domain's word for it; the schema says `variant`.
+        "variant": c.get("variant") or c.get("track"),
+        "dimension": dim,
+        "value": str(c["value"]),
+        "env": {var: str(c["value"])},
+        "rationale": " ".join((c.get("rationale") or "").split()),
+    })
+
+json.dump(out, sys.stdout, indent=2)
+print()
+PY

@@ -176,7 +176,7 @@ jobs:
           r-version: '4.4.2'
           use-public-rspm: true
 
-      - run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+      - run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
       - name: Collect racer PR metrics
         env:

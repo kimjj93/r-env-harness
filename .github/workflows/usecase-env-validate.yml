@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           SNAP="${{ inputs.ppm_snapshot }}"
           if [ -z "$SNAP" ]; then
-            SNAP=$(grep '^PPM_SNAPSHOT=' env/renv/ppm-snapshot.txt | cut -d= -f2)
+            SNAP=$(grep '^PPM_SNAPSHOT=' usecases/r-environment/env/renv/ppm-snapshot.txt | cut -d= -f2)
           fi
           echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
           echo "Using PPM snapshot: $SNAP"
@@ -69,7 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: env/renv/Dockerfile
+          file: usecases/r-environment/env/renv/Dockerfile
           build-args: |
             PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }}
           tags: r-env-harness/renv:${{ github.sha }}
@@ -101,7 +101,7 @@ jobs:
             -e HARNESS_TRACK=renv \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/validation/run-validation.R
+            Rscript /project/usecases/r-environment/validation/run-validation.R
           echo "status=$?" >> "$GITHUB_OUTPUT"
 
       - name: Extract environment manifest
@@ -112,7 +112,7 @@ jobs:
             -e PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }} \
             -v "${{ github.workspace }}/artifacts:/out" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/harness/image_manifest.R /out/manifest.json
+            Rscript /project/usecases/r-environment/bin/image_manifest.R /out/manifest.json
 
       - name: Fetch baseline manifest
         id: baseline
@@ -150,7 +150,7 @@ jobs:
             -e BASELINE_IMAGE_DIGEST="" \
             -e CANDIDATE_IMAGE_DIGEST="local-build-${{ github.sha }}" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/harness/image_delta.R \
+            Rscript /project/usecases/r-environment/bin/image_delta.R \
               /project/baseline/manifest.json \
               /project/artifacts/manifest.json \
               /project/artifacts \
@@ -165,7 +165,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/harness/riskmetric_scan.R \
+            Rscript /project/usecases/r-environment/bin/riskmetric_scan.R \
               /project/artifacts/delta.json /project/artifacts
 
       - name: Collect metrics row
@@ -180,7 +180,7 @@ jobs:
             -e CANDIDATE_IMAGE_DIGEST="local-build-${{ github.sha }}" \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/harness/metrics.R /project/artifacts
+            Rscript /project/usecases/r-environment/bin/metrics.R /project/artifacts
 
       - name: Upload evidence
         if: always()
@@ -235,7 +235,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          cd env/nix
+          cd usecases/r-environment/env/nix
           # ~5% of CRAN is unavailable in nixpkgs; record the gap as a finding
           # rather than forcing a less reproducible workaround.
           nix-build default.nix -o result
@@ -254,8 +254,8 @@ jobs:
         run: |
           mkdir -p artifacts
           ARTIFACT_DIR=artifacts HARNESS_TRACK=nix \
-            nix-shell env/nix/default.nix --run \
-            "Rscript validation/run-validation.R" || true
+            nix-shell usecases/r-environment/env/nix/default.nix --run \
+            "Rscript usecases/r-environment/validation/run-validation.R" || true
 
       - name: Upload Track B evidence
         if: always()

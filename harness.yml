@@ -1,0 +1,97 @@
+# harness.yml — the seam.
+#
+# Everything above this file is a general-purpose harness for supervised
+# autonomous work: agents propose on branches, evidence is produced by CI, a
+# research loop tunes proposals, and a human merges. None of that machinery
+# knows what is being validated.
+#
+# Everything the harness governs is declared here. Swap this file and the
+# directory it points at, and the same harness governs a different domain.
+#
+# The harness reads this file. The harness never reads inside `root`.
+# It never assumes a language, a build tool, or a test framework — only that
+# the declared commands exist, are executable, and write the evidence schema
+# documented in docs/schema/evidence.md.
+
+schema: 1
+
+usecase:
+  id: r-environment
+  name: R environment and package validation
+  root: usecases/r-environment
+  summary: >-
+    Reproducible, immutable R environments for regulatory submission. Two
+    independent pinning strategies are qualified in parallel and compared
+    against the merge base.
+
+# A variant is an independent thing to build and qualify. The harness fans out
+# over these: one CI job, one evidence bundle and one scoreboard row each.
+# A use case with a single variant simply lists one.
+variants:
+  - id: renv
+    name: Track A (renv + PPM)
+  - id: nix
+    name: Track B (Nix + rix)
+
+# The five verbs. Each is invoked as: <cmd> <variant-id> [args]
+# Exit status is the verdict for build; the others communicate through evidence.
+capabilities:
+
+  # Materialise a candidate state. Must be deterministic given the repo content.
+  build:
+    cmd: usecases/r-environment/bin/build
+    timeout_minutes: 45
+
+  # Prove the state correct. Writes JUnit XML plus a metrics document.
+  # This is the only place a use case decides what "correct" means.
+  qualify:
+    cmd: usecases/r-environment/bin/qualify
+    timeout_minutes: 30
+
+  # Compare this state against a baseline state (usually the merge base) and
+  # write a reviewable report plus a machine verdict.
+  delta:
+    cmd: usecases/r-environment/bin/delta
+    timeout_minutes: 20
+
+  # Emit the dimensions the research loop is allowed to vary, and the candidate
+  # values for each. The harness will never invent a dimension of its own.
+  candidates:
+    cmd: usecases/r-environment/bin/candidates
+
+  # Write a research candidate's value into the repository, so the weekly
+  # proposal has a real diff to review. Invoked as: <cmd> <dimension> <value>
+  # Exit 0 = applied (prints a one-line description), 3 = already current.
+  apply:
+    cmd: usecases/r-environment/bin/apply
+
+  # Optional. Publish an immutable artifact after a human merges to main.
+  # Omit the key entirely if the use case produces nothing to publish.
+  #
+  # Declared as a workflow rather than a command because keyless signing needs
+  # the OIDC token that only the CI platform can mint. A capability that cannot
+  # honestly run outside CI should say so instead of pretending to be a script.
+  publish:
+    workflow: .github/workflows/usecase-publish-image.yml
+    on: merge_to_main
+
+# How competing agents are ranked. Criteria are applied in order; each names a
+# field of the evidence schema. The harness knows the schema, not the domain.
+scoring:
+  - field: verdict          # stability first: a passing build outranks any speed
+    direction: prefer_pass
+  - field: margin_utilisation
+    direction: lower        # used less of the allowed slack
+  - field: change_magnitude
+    direction: lower        # changed less to achieve it
+  - field: cost_seconds
+    direction: lower        # and did so faster
+
+# Paths the harness owns and the use case must not write to directly.
+# Evidence is written by the capability commands, in the documented schema.
+reserved:
+  - AGENTS.md
+  - GOVERNANCE.md
+  - harness/
+  - harness.yml
+  - evidence/learnings.jsonl

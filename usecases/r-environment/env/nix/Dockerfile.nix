@@ -14,7 +14,7 @@ RUN mkdir -p /etc/nix && \
       >> /etc/nix/nix.conf
 
 WORKDIR /build
-COPY env/nix/default.nix /build/default.nix
+COPY usecases/r-environment/env/nix/default.nix /build/default.nix
 
 # Materialise the closure into a result symlink, then copy the full transitive
 # closure so the final image contains exactly the pinned store paths.
@@ -50,14 +50,15 @@ ARG OPENBLAS_CORETYPE=HASWELL
 ENV OPENBLAS_CORETYPE=${OPENBLAS_CORETYPE}
 
 WORKDIR /project
-COPY env/nix/.Rprofile /project/.Rprofile
-COPY analysis/    /project/analysis/
-COPY validation/  /project/validation/
-COPY harness/     /project/harness/
+COPY usecases/r-environment/env/nix/.Rprofile /project/.Rprofile
+COPY usecases/r-environment/analysis/    /project/usecases/r-environment/analysis/
+COPY usecases/r-environment/validation/  /project/usecases/r-environment/validation/
+COPY usecases/r-environment/bin/       /project/usecases/r-environment/bin/
+COPY harness.yml      /project/harness.yml
 
 # Put the pinned R on PATH so `Rscript ...` resolves to the Nix-built one.
 ENV PATH=/build/result/bin:$PATH
 
-RUN Rscript /project/harness/image_manifest.R /project/manifest.json || true
+RUN Rscript /project/usecases/r-environment/bin/image_manifest.R /project/manifest.json
 
 CMD ["R"]

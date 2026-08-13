@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # PHASE 2 — Execute Performance Qualification.
 #
-#   Rscript validation/run-validation.R
+#   Rscript usecases/r-environment/validation/run-validation.R
 #
 # Contract:
 #   * writes test-results.xml (JUnit) for CI and for Phase 3
@@ -17,10 +17,15 @@ suppressPackageStartupMessages({
   library(digest)
 })
 
-source("validation/R/helper_compare-reference.R")
-source("validation/R/testcase_adsl.R")
-source("validation/R/testcase_adae.R")
-source("validation/R/testcase_numeric.R")
+# Bootstrap: the helper defines usecase_path(), so this one path is resolved
+# relative to the use case root directly. Everything after it goes through the
+# helper.
+.uc <- Sys.getenv("HARNESS_USECASE_ROOT", unset = "usecases/r-environment")
+.uc <- if (dir.exists(file.path("/project", .uc))) file.path("/project", .uc) else .uc
+source(file.path(.uc, "validation/R/helper_compare-reference.R"))
+source(usecase_path("validation/R/testcase_adsl.R"))
+source(usecase_path("validation/R/testcase_adae.R"))
+source(usecase_path("validation/R/testcase_numeric.R"))
 
 artifacts <- Sys.getenv("ARTIFACT_DIR", unset = "artifacts")
 dir.create(artifacts, recursive = TRUE, showWarnings = FALSE)
@@ -42,7 +47,7 @@ reporter <- MultiReporter$new(list(
 ))
 
 results <- test_dir(
-  "validation/tests/testthat",
+  usecase_path("validation/tests/testthat"),
   reporter  = reporter,
   env       = globalenv(),
   stop_on_failure = FALSE

@@ -40,7 +40,7 @@ jobs:
           use-public-rspm: true
 
       - name: Install aggregation dependencies
-        run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
       - name: Collect the week's telemetry
         run: |

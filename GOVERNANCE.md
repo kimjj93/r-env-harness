@@ -10,19 +10,26 @@ where that line sits and how it is enforced.
 
 | Action | AI | Human |
 |---|---|---|
-| Research candidate environments | ✅ autonomous | — |
-| Build and test containers | ✅ autonomous | — |
-| Run Performance Qualification | ✅ autonomous | — |
-| Generate delta and risk reports | ✅ autonomous | — |
+| Research candidate changes | ✅ autonomous | — |
+| Build a candidate state (`build`) | ✅ autonomous | — |
+| Qualify it (`qualify`) | ✅ autonomous | — |
+| Generate delta and risk reports (`delta`) | ✅ autonomous | — |
 | Open a branch and a pull request | ✅ autonomous | — |
 | Review a PR and post findings | ✅ `COMMENT` only | ✅ |
 | **Approve a PR** | ❌ prohibited | ✅ **only** |
 | **Merge to `main`** | ❌ prohibited | ✅ **only** |
-| Publish a signed image from `main` | ✅ after human merge | — |
+| Publish an immutable artifact from `main` | ✅ after human merge | — |
 | Change these rules | ✅ may propose via PR | ✅ must approve |
+| Change the harness/use-case boundary | ✅ may propose via PR | ✅ must approve |
 
 The human is not in the loop to catch typos. The human is in the loop because
-**accountability for a regulated environment cannot be delegated to a model.**
+**accountability cannot be delegated to a model.** In the regulated domain this
+repository demonstrates, that is a legal fact rather than a preference; in any
+other domain it is still the reason the gate exists.
+
+This table is domain-independent on purpose. What "build" and "qualify" *mean*
+is declared per use case in `harness.yml`; who is allowed to do them is not
+negotiable per use case.
 
 ## 2. How it is enforced
 

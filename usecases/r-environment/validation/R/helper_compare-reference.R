@@ -318,10 +318,16 @@ harness_root <- function() {
   if (nzchar(explicit)) return(normalizePath(explicit, mustWork = FALSE))
 
   # Walk upward looking for a directory that is unmistakably the project root.
+  #
+  # The marker is `harness.yml` and ONLY `harness.yml`. This used to also accept
+  # `AGENTS.md`, which was unambiguous right up until the use case was given an
+  # AGENTS.md of its own -- at which point the walk stopped one directory too
+  # early, every fixture path gained a doubled prefix, and the suite reported
+  # four validation failures for what was a path bug. Precisely the costume
+  # described above. A root marker must be a file that exists exactly once.
   d <- normalizePath(getwd(), mustWork = FALSE)
   for (i in 1:6) {
-    if (file.exists(file.path(d, "AGENTS.md")) ||
-        dir.exists(file.path(d, "validation", "fixtures"))) {
+    if (file.exists(file.path(d, "harness.yml"))) {
       return(d)
     }
     parent <- dirname(d)
@@ -337,10 +343,19 @@ harness_root <- function() {
 # working directory, so a bare relative path is a latent failure.
 harness_path <- function(...) file.path(harness_root(), ...)
 
+# This use case lives in a subdirectory of the repository, because the harness
+# around it is meant to be reusable for domains that have nothing to do with R.
+# Resolve paths against the use case rather than repeating the prefix at every
+# call site: if the directory is ever renamed, exactly one line changes.
+usecase_root <- function() {
+  Sys.getenv("HARNESS_USECASE_ROOT", unset = "usecases/r-environment")
+}
+usecase_path <- function(...) harness_path(usecase_root(), ...)
+
 fixture_dir <- function() {
   base <- Sys.getenv("RVALIDATION_FIXTURE_DIR", unset = "")
   if (!nzchar(base)) {
-    base <- file.path(harness_root(), "validation", "fixtures", "references")
+    base <- usecase_path("validation", "fixtures", "references")
   }
   ver <- Sys.getenv("VALIDATION_REF_VERSION", unset = "")
   if (!nzchar(ver)) {
@@ -356,7 +371,7 @@ load_fixture <- function(name) {
     # demand opposite responses: one is a setup step, the other is a finding.
     stop("FIXTURE MISSING (this is a setup problem, not a validation finding): ",
          path,
-         "\nRun Phase 1 (validation/build-fixtures.R) in a trusted environment",
+         "\nRun Phase 1 (build-fixtures.R) in a trusted environment",
          "\nand commit the resulting baselines. Resolved harness root: ",
          harness_root())
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # riskmetric scan for newly added packages.
 #
-#   Rscript harness/riskmetric_scan.R <delta.json> [outdir]
+#   Rscript usecases/r-environment/bin/riskmetric_scan.R <delta.json> [outdir]
 #
 # Scans ONLY packages that are new in this change. Re-scoring the whole library
 # on every PR produces noise that trains reviewers to skip the section.

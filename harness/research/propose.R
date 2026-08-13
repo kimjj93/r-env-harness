@@ -29,64 +29,44 @@ if ((rec$recommendation %||% "NONE") != "PROPOSE") {
   quit(status = 0)
 }
 
+# Domain-specific closing material, if the use case provides any.
+usecase_footer <- function(root) {
+  ucroot <- tryCatch(
+    system2("harness/usecase", "root", stdout = TRUE, stderr = NULL),
+    error = function(e) character(0))
+  if (!length(ucroot) || !nzchar(ucroot[[1]])) return(character(0))
+  f <- file.path(root, ucroot[[1]], "proposal-footer.md")
+  if (!file.exists(f)) return(character(0))
+  readLines(f, warn = FALSE)
+}
+
 cand <- rec$candidate
 raw  <- rec$raw %||% list()
 id   <- cand$candidate_id %||% "unknown"
 
-# ---- apply the pin change -------------------------------------------------
+# ---- apply the change, via the use case ------------------------------------
+#
+# The harness knows a dimension should move. It does not know which file holds
+# that pin or what its syntax is, and it must not learn: the moment this script
+# contains a pin file path from one domain, the harness only works for
+# one domain. Ask the use case to do it.
+#
+# Exit 3 from `apply` means "already current". That is a successful outcome,
+# not an error.
 
 dimension <- cand$dimension %||% ""
 new_value <- raw$candidate_value %||% cand$value %||% ""
 
+apply_cmd <- system2("harness/usecase", c("cmd", "apply"), stdout = TRUE, stderr = NULL)
+status <- 3L
 applied <- "none"
-if (dimension == "ppm_snapshot" && nzchar(new_value)) {
-  f <- file.path(root, "env/renv/ppm-snapshot.txt")
-  txt <- readLines(f, warn = FALSE)
-  old <- sub("^PPM_SNAPSHOT=", "", grep("^PPM_SNAPSHOT=", txt, value = TRUE)[1])
-  if (identical(old, new_value)) {
-    message("PPM snapshot is already ", new_value, " - nothing to propose.")
-  } else {
-    txt <- sub("^PPM_SNAPSHOT=.*", paste0("PPM_SNAPSHOT=", new_value), txt)
-    writeLines(txt, f)
-    applied <- sprintf("PPM snapshot %s -> %s", old, new_value)
-    message("Applied: ", applied)
-  }
-} else if (dimension == "nixpkgs_date" && nzchar(new_value)) {
-  f <- file.path(root, "env/nix/nixpkgs-pin.txt")
-  if (file.exists(f)) {
-    txt <- readLines(f, warn = FALSE)
-    old <- sub("^NIXPKGS_DATE=", "", grep("^NIXPKGS_DATE=", txt, value = TRUE)[1])
-    if (identical(old, new_value)) {
-      message("nixpkgs date is already ", new_value, " - nothing to propose.")
-    } else {
-      txt <- sub("^NIXPKGS_DATE=.*", paste0("NIXPKGS_DATE=", new_value), txt)
-      writeLines(txt, f)
-      applied <- sprintf("nixpkgs date %s -> %s", old, new_value)
-      message("Applied: ", applied)
-    }
-  }
-} else if (dimension == "base_digest") {
-  # This branch used to set a description and edit nothing, so the loop could
-  # spend the human's single weekly review on a pull request that changed no
-  # file at all. Resolve the digest and edit the FROM line, or propose nothing.
-  new_digest <- Sys.getenv("CANDIDATE_BASE_DIGEST", unset = "")
-  if (!nzchar(new_digest)) new_digest <- raw$base_digest %||% ""
-  f <- file.path(root, "env/renv/Dockerfile")
-  txt <- readLines(f, warn = FALSE)
-  i <- grep("^FROM .*@sha256:", txt)[1]
-  if (nzchar(new_digest) && !is.na(i)) {
-    old_digest <- sub(".*@(sha256:[0-9a-f]+).*", "\\1", txt[i])
-    if (identical(old_digest, new_digest)) {
-      message("Base digest is already ", new_digest, " - nothing to propose.")
-    } else {
-      txt[i] <- sub("@sha256:[0-9a-f]+", paste0("@", new_digest), txt[i])
-      writeLines(txt, f)
-      applied <- sprintf("base image digest %s -> %s", old_digest, new_digest)
-      message("Applied: ", applied)
-    }
-  } else {
-    message("No resolvable base digest for this candidate - nothing to propose.")
-  }
+if (length(apply_cmd) == 1 && nzchar(apply_cmd) && nzchar(dimension) && nzchar(new_value)) {
+  out <- system2(apply_cmd, c(shQuote(dimension), shQuote(new_value)),
+                 stdout = TRUE, stderr = "")
+  status <- attr(out, "status") %||% 0L
+  if (identical(as.integer(status), 0L) && length(out)) applied <- trimws(out[[1]])
+} else {
+  message("No `apply` capability declared, or no dimension/value to apply.")
 }
 
 # ---- refuse to propose a change that is not a change ----------------------
@@ -146,9 +126,9 @@ L <- c(
 
 L <- c(L, switch(verdict,
   "IDENTICAL" = c(
-    "The environment changed and **the analysis outputs did not**. ADSL and ADAE",
-    "checksums are bit-for-bit identical to the incumbent. This is the strongest",
-    "possible outcome: the upgrade is invisible to the science."),
+    "The inputs changed and **the results did not**. Output checksums are",
+    "bit-for-bit identical to the incumbent. This is the strongest possible",
+    "outcome: the change is invisible to the science."),
   "PASS_WITH_CHANGES" = c(
     "Package versions moved and every validation assertion still passed under the",
     "strict criterion. Output checksums are unchanged."),
@@ -229,28 +209,16 @@ if (!is.null(detail)) {
 L <- c(L, "",
   "A rejected candidate is a successful experiment. It cost no review time and it",
   "told us something about the upgrade path.", "",
-  "## 5. Package risk", "",
-  "`riskmetric` scores for any newly introduced package are in `risk-scan.json`",
-  sprintf("in the run artifacts. The gate requires a minimum score of %s.",
-          rec$risk_min %||% "0.5"),
-  "",
-  "## 6. Evidence and references", "",
+  "## 5. Evidence and references", "",
   sprintf("- Nightly run: `%s`", raw$run_id %||% "see telemetry"),
   sprintf("- Recorded: `%s`", raw$timestamp %||% "n/a"),
   "- Full telemetry: `research/telemetry` branch, `evidence/metrics/metrics.jsonl`",
-  "- Four-layer delta: `delta.md` / `delta.json` in the run artifacts",
-  "- PQ detail: `test-results.xml` (JUnit), `pq-summary.json`",
+  "- Delta report: `evidence/delta/` in the run artifacts",
+  "- Qualification detail: JUnit XML in `evidence/qualify/`",
   "",
-  "Methodology basis:",
-  "",
-  "- Three-phase decoupled validation and the strict/tolerant criterion:",
-  "  `pfizer-rd/rvalidation-refactored`",
-  "- Dated snapshot pinning for repeatable deployments: Posit,",
-  "  *Containerization in Posit Connect*",
-  "- Submissions cite exact R and package versions:",
-  "  `philbowsher/Open-Source-in-New-Drug-Applications-NDAs-FDA`",
-  "- Package risk scoring: R Validation Hub `{riskmetric}`",
-  "- Nix-based full-closure pinning (Track B): `ropensci/rix`",
+  # The use case supplies its own methodology citations. The harness has no
+  # opinion about which papers justify a domain it has never heard of.
+  usecase_footer(root),
   "",
   "## 7. What this PR does NOT claim", "",
   "This is evidence, not a decision. The harness cannot know whether the changed",
