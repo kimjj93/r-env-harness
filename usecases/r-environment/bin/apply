@@ -1,0 +1,97 @@
+#!/usr/bin/env Rscript
+# apply <dimension> <value> — write a research candidate into the repo.
+#
+# Implements the `apply` capability. The research loop discovers that some pin
+# should move; only this use case knows which file holds that pin and what its
+# syntax is.
+#
+# Prints a one-line human description of what changed to stdout, or nothing at
+# all if the value was already in place. Exit 0 means "applied", exit 3 means
+# "already current, nothing to do". Anything else is an error.
+#
+# Exit 3 matters more than it looks. A proposal pull request spends a scarce
+# resource: one human review per week. Opening one that edits nothing trains the
+# reviewer to skim, which is precisely the failure mode this harness exists to
+# prevent. "The incumbent pin is still the best available" is a successful
+# outcome and should cost zero review.
+
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 2) {
+  stop("usage: apply <dimension> <value>", call. = FALSE)
+}
+dimension <- args[[1]]
+new_value <- args[[2]]
+root      <- normalizePath(file.path(dirname(sub("--file=", "",
+                 grep("--file=", commandArgs(FALSE), value = TRUE)[1])), "..", "..", ".."),
+                 mustWork = FALSE)
+if (!dir.exists(root)) root <- "."
+
+if (!nzchar(new_value)) stop("apply: empty value for dimension ", dimension, call. = FALSE)
+
+# Replace a KEY=value line in a pin file. Returns the old value, or NULL when
+# the file has no such line.
+replace_kv <- function(path, key, value) {
+  if (!file.exists(path)) return(NULL)
+  txt <- readLines(path, warn = FALSE)
+  i <- grep(paste0("^", key, "="), txt)[1]
+  if (is.na(i)) return(NULL)
+  old <- sub(paste0("^", key, "="), "", txt[i])
+  if (identical(old, value)) return(list(old = old, changed = FALSE))
+  txt[i] <- paste0(key, "=", value)
+  writeLines(txt, path)
+  list(old = old, changed = TRUE)
+}
+
+result <- switch(dimension,
+
+  ppm_snapshot = {
+    r <- replace_kv(file.path(root, "usecases/r-environment/env/renv/ppm-snapshot.txt"),
+                    "PPM_SNAPSHOT", new_value)
+    if (is.null(r)) NULL
+    else list(changed = r$changed,
+              desc = sprintf("PPM snapshot %s -> %s", r$old, new_value))
+  },
+
+  nixpkgs_date = {
+    r <- replace_kv(file.path(root, "usecases/r-environment/env/nix/nixpkgs-pin.txt"),
+                    "NIXPKGS_DATE", new_value)
+    if (is.null(r)) NULL
+    else list(changed = r$changed,
+              desc = sprintf("nixpkgs date %s -> %s", r$old, new_value))
+  },
+
+  base_digest = {
+    # This branch once set a description and edited nothing, so the loop could
+    # spend the human's single weekly review on a pull request that changed no
+    # file at all. Resolve the digest and edit the FROM line, or propose nothing.
+    f <- file.path(root, "usecases/r-environment/env/renv/Dockerfile")
+    if (!file.exists(f)) NULL else {
+      txt <- readLines(f, warn = FALSE)
+      i <- grep("^FROM .*@sha256:", txt)[1]
+      if (is.na(i) || !grepl("^sha256:[0-9a-f]+$", new_value)) NULL else {
+        old <- sub(".*@(sha256:[0-9a-f]+).*", "\\1", txt[i])
+        if (identical(old, new_value)) list(changed = FALSE, desc = "")
+        else {
+          txt[i] <- sub("@sha256:[0-9a-f]+", paste0("@", new_value), txt[i])
+          writeLines(txt, f)
+          list(changed = TRUE,
+               desc = sprintf("base image digest %s -> %s", old, new_value))
+        }
+      }
+    }
+  },
+
+  NULL
+)
+
+if (is.null(result)) {
+  message("apply: no rule for dimension '", dimension,
+          "'. Add one here rather than teaching the harness about it.")
+  quit(status = 2)
+}
+if (!isTRUE(result$changed)) {
+  message("apply: ", dimension, " is already ", new_value, " - nothing to propose.")
+  quit(status = 3)
+}
+cat(result$desc, "\n", sep = "")
+quit(status = 0)

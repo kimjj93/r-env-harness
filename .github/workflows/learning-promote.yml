@@ -1,0 +1,168 @@
+name: learning-promote
+
+# The other half of step 4.
+#
+# `skills-drift` detects *mechanical* drift: a SKILL.md pointing at a path that
+# no longer exists, a workflow nobody documented. It is good at contradictions
+# it can compute. It is blind to the more common problem -- a rule that is
+# present, accurate, and still misread every time somebody works here.
+#
+# That knowledge only exists in what the work taught us, so `evidence/learnings.jsonl`
+# records it and this workflow decides when a recorded lesson has been seen
+# often enough to belong in the contract every agent reads.
+#
+# The threshold is the entire design. Promoting every observation would grow
+# AGENTS.md until agents skim it, and a skimmed contract governs nothing.
+# Recording is cheap; promotion costs a human review, which is the scarce
+# resource this repository is built to protect.
+
+on:
+  pull_request:
+  schedule:
+    # Monday, an hour after the environment proposal, so the two never contend
+    # for the same branch push and the human sees them in a predictable order.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Occurrences required before a lesson enters AGENTS.md"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: learning-promote-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs on every pull request. A malformed learning log is caught here rather
+  # than on the Monday it would otherwise break the promotion job.
+  validate:
+    name: Learning log
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4.2"
+          use-public-rspm: true
+
+      - name: Install jsonlite
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+
+      - name: Validate the learning log
+        run: Rscript harness/learnings.R validate evidence/learnings.jsonl
+
+      - name: The generated block must match the log
+        run: |
+          set -euo pipefail
+          cp AGENTS.md /tmp/AGENTS.before
+          Rscript harness/promote_learnings.R evidence/learnings.jsonl AGENTS.md 2 >/dev/null
+          if ! diff -q /tmp/AGENTS.before AGENTS.md >/dev/null; then
+            echo "::error file=AGENTS.md::The recurring-lessons block does not match evidence/learnings.jsonl."
+            echo "It is generated. Run: Rscript harness/promote_learnings.R evidence/learnings.jsonl AGENTS.md 2"
+            diff /tmp/AGENTS.before AGENTS.md || true
+            exit 1
+          fi
+          echo "Generated block is in sync with the log."
+
+      - name: Summary
+        run: Rscript harness/learnings.R summary evidence/learnings.jsonl >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote recurring lessons
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # Needed to create the `learning-promotion` label if it is absent.
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4.2"
+          use-public-rspm: true
+
+      - name: Install jsonlite
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+
+      - name: Validate before proposing anything
+        run: Rscript harness/learnings.R validate evidence/learnings.jsonl
+
+      - name: Regenerate the recurring-lessons block
+        id: promote
+        run: |
+          set -euo pipefail
+          THRESHOLD="${{ github.event.inputs.threshold || '2' }}"
+          mkdir -p artifacts
+          Rscript harness/promote_learnings.R \
+            evidence/learnings.jsonl AGENTS.md "$THRESHOLD" artifacts/promotion.md \
+            | tee /tmp/out.txt
+          grep -q '^changed=true$' /tmp/out.txt && echo "changed=true" >> "$GITHUB_OUTPUT" || echo "changed=false" >> "$GITHUB_OUTPUT"
+
+      # One open promotion PR at a time. A second would be asking the human to
+      # review the same generated block twice.
+      - name: Skip if a promotion PR is already open
+        id: dedupe
+        if: steps.promote.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OPEN=$(gh pr list --state open --label learning-promotion --json number --jq 'length')
+          echo "open=$OPEN" >> "$GITHUB_OUTPUT"
+          [ "$OPEN" != "0" ] && echo "::notice::A promotion pull request is already awaiting review." || true
+
+      - name: Open the promotion pull request
+        if: steps.promote.outputs.changed == 'true' && steps.dedupe.outputs.open == '0'
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="skills/learning-promotion-$(date -u +%Y-%m-%d)"
+
+          # `gh pr create --label` fails outright if the label is absent, and
+          # this path may not run for months. Ensure it exists rather than
+          # discovering it is missing on the one day this matters.
+          gh label create learning-promotion \
+            --color 1D76DB \
+            --description "A lesson in evidence/learnings.jsonl has recurred and is proposed for AGENTS.md" \
+            2>/dev/null || true
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          git add AGENTS.md
+          git commit \
+            -m "docs(agents): promote recurring lessons into the contract" \
+            -m "Regenerated from evidence/learnings.jsonl. Only lessons recorded more than once are surfaced; single observations remain in the log. Evidence, not policy: the rule text, if any is warranted, is a human edit made while reviewing this pull request."
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "docs(agents): a lesson has recurred" \
+            --body-file artifacts/promotion.md \
+            --label "learning-promotion" \
+            --label "needs-human-review"
+
+      - name: Nothing to promote
+        if: steps.promote.outputs.changed != 'true'
+        run: |
+          echo "::notice::No lesson has newly recurred. The contract already reflects the log."
+          Rscript harness/learnings.R summary evidence/learnings.jsonl >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: learning-promotion
+          path: artifacts/
+          if-no-files-found: ignore

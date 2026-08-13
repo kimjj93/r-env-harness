@@ -14,7 +14,12 @@
 
 args    <- commandArgs(trailingOnly = TRUE)
 metrics_file <- if (length(args) >= 1) args[1] else "evidence/metrics/metrics.jsonl"
-cand_file    <- if (length(args) >= 2) args[2] else "harness/research/candidates.yml"
+# Default resolves through the use case, so the harness never names the file.
+cand_file    <- if (length(args) >= 2) args[2] else {
+  uc <- tryCatch(system2("harness/usecase", "root", stdout = TRUE, stderr = NULL),
+                 error = function(e) character(0))
+  if (length(uc) && nzchar(uc[[1]])) file.path(uc[[1]], "candidates.yml") else ""
+}
 outdir       <- if (length(args) >= 3) args[3] else "artifacts"
 
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
@@ -72,25 +77,28 @@ if (length(week) == 0) {
 # Read thresholds from candidates.yml so policy lives in one reviewable place
 # rather than being hard-coded here.
 
-gate_pq_max   <- 0
-forbidden     <- c("FAIL_DEVIATION", "FAIL_NONDETERMINISM")
-risk_min      <- 0.5
+gate_checks_max <- 0
+forbidden       <- c("FAIL_DEVIATION", "FAIL_NONDETERMINISM")
+
+# Gates the use case declares for itself, as `<field>_min:` / `<field>_max:`
+# lines. The harness enforces thresholds without knowing what any field means,
+# which is what lets a different domain add its own gate without touching this.
+extra_gates <- list()
 if (file.exists(cand_file)) {
   y <- readLines(cand_file, warn = FALSE)
-  m <- grep("^\\s*pq_failed_max:", y, value = TRUE)
-  if (length(m)) gate_pq_max <- as.numeric(sub(".*:\\s*", "", m[1]))
-  m <- grep("^\\s*riskmetric_min:", y, value = TRUE)
-  if (length(m)) risk_min <- as.numeric(sub(".*:\\s*", "", m[1]))
+  m <- grep("^\\s*checks_failed_max:", y, value = TRUE)
+  if (length(m)) gate_checks_max <- as.numeric(sub(".*:\\s*", "", m[1]))
+  for (line in grep("^\\s{4,}[a-z_]+_(min|max):", y, value = TRUE)) {
+    key <- trimws(sub(":.*", "", line))
+    val <- suppressWarnings(as.numeric(sub(".*:\\s*", "", line)))
+    if (!is.na(val) && !key %in% c("checks_failed_max")) extra_gates[[key]] <- val
+  }
 }
 
-# The value the candidate actually tested, recovered from the dimension it
-# varies. A candidate with no realised value cannot be turned into a pin edit.
+# The value the candidate actually tested. The research loop records it on every
+# row as `candidate_value`; a row without one cannot be turned into an edit.
 realised_value <- function(r) {
-  v <- switch(as.character(r$dimension %||% ""),
-    "ppm_snapshot" = r$ppm_snapshot %||% "",
-    "nixpkgs_date" = r$nixpkgs_date %||% "",
-    "base_digest"  = r$base_digest  %||% "",
-    "")
+  v <- r$candidate_value %||% r$value %||% ""
   if (is.null(v) || length(v) == 0 || is.na(v)) "" else as.character(v)
 }
 
@@ -98,9 +106,18 @@ passes_gates <- function(r) {
   reasons <- character(0)
   if ((r$status %||% "unknown") != "success")        reasons <- c(reasons, sprintf("status=%s", r$status %||% "unknown"))
   if ((r$verdict %||% "") %in% forbidden)            reasons <- c(reasons, sprintf("verdict=%s", r$verdict))
-  if (as.numeric(r$pq_failed %||% 0) > gate_pq_max)  reasons <- c(reasons, sprintf("pq_failed=%s", r$pq_failed))
-  rm_score <- suppressWarnings(as.numeric(r$riskmetric_min %||% NA))
-  if (!is.na(rm_score) && rm_score < risk_min)       reasons <- c(reasons, sprintf("riskmetric_min=%.2f", rm_score))
+  failed <- as.numeric(r$checks_failed %||% r$pq_failed %||% 0)
+  if (failed > gate_checks_max)                      reasons <- c(reasons, sprintf("checks_failed=%s", failed))
+  # Domain-declared thresholds, applied by name. `foo_min: 0.5` fails any row
+  # whose `foo` is below 0.5; `foo_max` is the mirror image.
+  for (key in names(extra_gates)) {
+    field <- sub("_(min|max)$", "", key)
+    obs   <- suppressWarnings(as.numeric(r[[field]] %||% NA))
+    if (is.na(obs)) next
+    lim <- extra_gates[[key]]
+    bad <- if (grepl("_min$", key)) obs < lim else obs > lim
+    if (bad) reasons <- c(reasons, sprintf("%s=%s (gate %s)", field, format(obs), key))
+  }
   # A candidate that cannot be expressed as an edit to a pin file is not a
   # proposal candidate. Leaving such rows eligible let a no-op win the ranking
   # and then abort the week, so a genuinely good candidate was never proposed:

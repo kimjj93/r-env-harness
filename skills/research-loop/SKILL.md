@@ -27,7 +27,7 @@ cost nothing in attention; only conclusions reach a person.
 
 ## Nightly: gather
 
-Read `harness/research/candidates.yml` — the search space:
+Read the use case's `candidates.yml` — the search space:
 
 ```yaml
 candidates:
@@ -119,5 +119,5 @@ Append-only. Never rewrite history — a corrected row is a new row.
 ## References
 
 - `AGENTS.md` §4 — evidence standards
-- `skills/env-delta/SKILL.md` — the four-layer delta
-- `skills/performance-qualification/SKILL.md` — what "passing" means
+- the use case's delta skill — what a delta report must contain
+- the use case's qualification skill — what "passing" means

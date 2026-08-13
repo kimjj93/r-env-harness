@@ -10,19 +10,26 @@ where that line sits and how it is enforced.
 
 | Action | AI | Human |
 |---|---|---|
-| Research candidate environments | ✅ autonomous | — |
-| Build and test containers | ✅ autonomous | — |
-| Run Performance Qualification | ✅ autonomous | — |
-| Generate delta and risk reports | ✅ autonomous | — |
+| Research candidate changes | ✅ autonomous | — |
+| Build a candidate state (`build`) | ✅ autonomous | — |
+| Qualify it (`qualify`) | ✅ autonomous | — |
+| Generate delta and risk reports (`delta`) | ✅ autonomous | — |
 | Open a branch and a pull request | ✅ autonomous | — |
 | Review a PR and post findings | ✅ `COMMENT` only | ✅ |
 | **Approve a PR** | ❌ prohibited | ✅ **only** |
 | **Merge to `main`** | ❌ prohibited | ✅ **only** |
-| Publish a signed image from `main` | ✅ after human merge | — |
+| Publish an immutable artifact from `main` | ✅ after human merge | — |
 | Change these rules | ✅ may propose via PR | ✅ must approve |
+| Change the harness/use-case boundary | ✅ may propose via PR | ✅ must approve |
 
 The human is not in the loop to catch typos. The human is in the loop because
-**accountability for a regulated environment cannot be delegated to a model.**
+**accountability cannot be delegated to a model.** In the regulated domain this
+repository demonstrates, that is a legal fact rather than a preference; in any
+other domain it is still the reason the gate exists.
+
+This table is domain-independent on purpose. What "build" and "qualify" *mean*
+is declared per use case in `harness.yml`; who is allowed to do them is not
+negotiable per use case.
 
 ## 2. How it is enforced
 
@@ -90,11 +97,52 @@ status checks, a missing check is treated as unsatisfied, and the PR is
 **blocked** — the failure mode is fail-closed, which is the correct direction.
 An unvalidated environment change cannot reach `main` this way.
 
-Note this affects only PRs opened *by workflows*. Pull requests opened by the
-Copilot coding agent during an `agent-race` come from a bot **user**, not from
-`GITHUB_TOKEN`, and trigger the gate normally.
+Note this affects only PRs opened *by workflows*. Pull requests opened by a
+coding agent during an `agent-race` come from a bot **user**, not from
+`GITHUB_TOKEN`, so they are subject to a different control — described next.
 
-Two remedies, in order of preference:
+### Agent pull requests require a human to approve running CI
+
+This was originally documented here as "agent PRs trigger the gate normally".
+That was **wrong**, and observing a real race corrected it.
+
+When a coding agent opens a PR, GitHub treats it as an external contributor.
+Its workflow runs are created but land in **`action_required`** and do not
+execute until a human clicks **"Approve and run workflows"** on the PR. Observed
+directly: both racer PRs in the first live race showed *no checks*, with
+`env-validate` runs sitting at `conclusion=action_required`.
+
+Two things follow, and they matter in opposite directions.
+
+**It is not a bug, and you should not route around it.** Workflows can read
+secrets and hold write permissions. Running unreviewed, agent-authored code in
+that context, automatically, is precisely the supply-chain risk that
+`pull_request_target` misuse has caused in real projects. This approval is the
+last checkpoint before AI-written code executes with your repository's
+credentials. It is a *stronger* version of the same principle the rest of this
+document is built on.
+
+**But it does mean the race is not fully unattended.** The honest statement is:
+the research loop and the weekly proposal run with zero human input; an agent
+race costs you one click per racer before its evidence appears. Budget for that
+rather than being surprised by it.
+
+Note also that `close/reopen` does **not** clear this state — verified. That
+remedy works for `GITHUB_TOKEN` PRs, not agent PRs. To evaluate an agent branch
+without granting it CI, dispatch the gate against the branch directly:
+
+```bash
+gh workflow run env-validate.yml --ref <agent-branch>
+```
+
+This runs with *you* as the triggering actor, so no approval is required, and it
+produces the same build and PQ evidence.
+
+GitHub does offer a repository setting to skip approval for coding-agent
+workflows. **This harness recommends leaving it on.** Turning it off buys a
+click and sells the checkpoint.
+
+Two remedies for the `GITHUB_TOKEN` case, in order of preference:
 
 1. **Set a `HARNESS_BOT_TOKEN` secret** — a fine-grained PAT or GitHub App
    installation token with *Contents: read & write* and *Pull requests: read &
@@ -107,6 +155,41 @@ Two remedies, in order of preference:
 
 When no bot token is configured, `build-fixtures` appends an explicit warning to
 the PR body so the reviewer is never left to infer why the checks are absent.
+
+### `HARNESS_BOT_TOKEN` is mandatory for `agent-race`
+
+For the workflows above the token is an *improvement*: without it the loop still
+runs and fails closed. For `agent-race` it is a hard **prerequisite**, and the
+distinction is worth stating plainly because the failure is not obvious.
+
+Assigning an issue to a coding agent uses the `replaceActorsForAssignable`
+GraphQL mutation, and GitHub rejects it outright for App installation tokens:
+
+```
+FORBIDDEN: Assigning agents is not supported with GitHub App installation
+tokens. Use a user token (personal access token or OAuth token) instead.
+```
+
+`GITHUB_TOKEN` **is** an App installation token, so no configuration of
+`permissions:` can make this work. Verified: the same mutation with the same
+actor ID succeeds with a user token and fails with `GITHUB_TOKEN`.
+
+There is a second, quieter consequence. The `suggestedActors` query returns a
+*different set of agents depending on the token*:
+
+| Token | Agents returned |
+|---|---|
+| `GITHUB_TOKEN` | `anthropic-code-agent`, `openai-code-agent` |
+| user token / PAT | those **plus `copilot-swe-agent`** |
+
+So under `GITHUB_TOKEN` the Copilot racer is not merely unassignable — it is
+invisible, and would silently never appear in a race. The workflow now names
+this case explicitly rather than reporting a generic skip.
+
+The token needs `repo` scope (classic) or *Issues: read & write* plus
+*Pull requests: read & write* (fine-grained). Until it is set, `agent-race`
+fails loudly, closes any issue it created but could not assign, and tells you
+exactly which secret is missing. It does not pretend to have started a race.
 
 ## 3. Why AI reviews are still worth having
 
@@ -125,6 +208,12 @@ Review burden is the scarcest resource in this system, so it is budgeted:
 - Research findings are batched into **exactly one** proposal PR per week — and
   none at all if nothing outperformed the incumbent.
 - Agent races auto-close losing entries, so only the winner reaches a human.
+- The learning log (`evidence/learnings.jsonl`) absorbs observations **without**
+  opening anything. `learning-promote.yml` converts one into a PR only after the
+  same lesson has been recorded twice. This is the reason the threshold exists at
+  all: promotion spends the scarce resource, so it has to be earned. A harness
+  that proposed a rule for every observation would consume more review time than
+  the environment proposals it exists to support.
 
 Target steady-state load: **one substantive review per week**, plus any
 task-driven PRs the team initiates.

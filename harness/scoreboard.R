@@ -78,7 +78,11 @@ collect <- function(pr) {
     pq_passed  = as.numeric(pq$passed %||% metrics$pq_passed %||% NA),
     pq_failed  = as.numeric(pq$failed %||% metrics$pq_failed %||% NA),
     tol_util   = as.numeric(pq$tolerance_utilisation %||% metrics$tolerance_utilisation %||% NA),
-    churn      = as.numeric(delta$package_churn %||% metrics$package_churn %||% NA),
+    # Read the field where it actually lives. Both earlier spellings here were
+    # wrong -- delta.json nests churn under layer3_packages, and the metrics row
+    # calls it delta_churn -- so this criterion silently evaluated to NA on
+    # every racer and the ranking quietly ran on three criteria instead of four.
+    churn      = as.numeric(delta$layer3_packages$churn %||% metrics$delta_churn %||% NA),
     build_s    = as.numeric(metrics$build_seconds %||% NA),
     size_mb    = as.numeric(metrics$image_size_mb %||% NA)
   )
@@ -162,7 +166,7 @@ if (length(ranked) >= 2) {
   if (!is.na(w$churn) && !is.na(s$churn) && !is.na(w$build_s) && !is.na(s$build_s) &&
       w$build_s > s$build_s) {
     L <- c(L, sprintf(
-      "Note the trade-off the race exposed: #%s wins on stability and churn but is %s s slower to build than #%s. If build time matters more to you than review surface, the ranking policy -- not the evidence -- is what you disagree with, and that policy is editable in `harness/research/candidates.yml`.",
+      "Note the trade-off the race exposed: #%s wins on stability and churn but is %s s slower to build than #%s. If build time matters more to you than review surface, the ranking policy -- not the evidence -- is what you disagree with, and that policy is editable in the use case's candidate policy.",
       w$number, fmt(w$build_s - s$build_s, 0), s$number), "")
   }
 }

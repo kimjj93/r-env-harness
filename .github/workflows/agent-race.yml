@@ -77,6 +77,7 @@ jobs:
           bot_id () { grep -m1 "^$1"$'\t' /tmp/actors.tsv | cut -f2 || true; }
 
           ASSIGNED=0
+          CREATED=""
 
           IFS=',' read -ra LIST <<< "$RACERS"
           for racer in "${LIST[@]}"; do
@@ -121,14 +122,25 @@ jobs:
             gh api graphql -f query='mutation($aid:ID!,$ids:[ID!]!){replaceActorsForAssignable(input:{assignableId:$aid,actorIds:$ids}){assignable{... on Issue{number}}}}' \
               -f aid="$ISSUE_ID" -f ids="$BOT" \
               && { echo "  assigned to $LOGIN"; ASSIGNED=$((ASSIGNED+1)); } \
-              || echo "::warning::Could not assign $LOGIN to #$NUM"
+              || { echo "::warning::Could not assign $LOGIN to #$NUM"; CREATED="$CREATED $NUM"; }
           done
 
           # A race nobody entered is not a successful race. Without this the
           # workflow reports green having done nothing, and the scoreboard job
           # waits for PRs that will never arrive.
+          # Close any issue we opened but could not assign, whether or not the
+          # race as a whole proceeds. An unassigned racer issue is litter in
+          # every case: nothing will ever work on it, and it would otherwise
+          # sit in the backlog looking like real queued work.
+          for n in $CREATED; do
+            gh issue close "$n" --reason "not planned" \
+              --comment "Closing automatically: no coding agent could be assigned to this racer, so it never started. See the workflow run for the reason." || true
+            echo "Closed orphan issue #$n"
+          done
+
           if [ "$ASSIGNED" -eq 0 ]; then
-            echo "::error::No racer could be assigned. Check that at least one coding agent is enabled for this repository, and set HARNESS_BOT_TOKEN to include copilot-swe-agent."
+            echo "::error::No racer could be assigned."
+            echo "::error::Assigning agents requires a *user* token: GitHub App installation tokens (including GITHUB_TOKEN) are rejected by replaceActorsForAssignable. Create a PAT with repo scope and store it as the HARNESS_BOT_TOKEN secret."
             exit 1
           fi
           echo "Racers dispatched: $ASSIGNED"
@@ -164,7 +176,7 @@ jobs:
           r-version: '4.4.2'
           use-public-rspm: true
 
-      - run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+      - run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
       - name: Collect racer PR metrics
         env:

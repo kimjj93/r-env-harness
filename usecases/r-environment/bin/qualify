@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# qualify <variant> — prove the built environment reproduces its references.
+#
+# Implements the `qualify` capability. Performance Qualification runs INSIDE the
+# built image, never on the runner: the evidence must come from the same bits
+# that would ship, or it is evidence about the runner.
+#
+# Writes, per the schema in docs/schema/evidence.md:
+#   evidence/qualify/<variant>-junit.xml    authoritative record
+#   evidence/qualify/<variant>-qualify.json harness-readable summary
+
+set -euo pipefail
+
+VARIANT="${1:?usage: qualify <variant>}"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$ROOT"
+
+TAG="r-env-harness/${VARIANT}:${GITHUB_SHA:-local}"
+OUT="evidence/qualify"
+WORK="$(mktemp -d)"
+mkdir -p "$OUT"
+trap 'rm -rf "$WORK"' EXIT
+
+START=$(date +%s)
+set +e
+docker run --rm \
+  -e ARTIFACT_DIR=/project/artifacts \
+  -e HARNESS_TRACK="$VARIANT" \
+  -v "$WORK:/project/artifacts" \
+  "$TAG" \
+  Rscript /project/usecases/r-environment/validation/run-validation.R
+PQ_STATUS=$?
+set -e
+END=$(date +%s)
+
+[ -f "$WORK/test-results.xml" ] && cp "$WORK/test-results.xml" "$OUT/${VARIANT}-junit.xml"
+[ -f "$WORK/pq-summary.json" ]  && cp "$WORK/pq-summary.json"  "$OUT/${VARIANT}-pq-detail.json"
+
+# Translate the domain's own summary into the harness vocabulary. The domain
+# says "tolerance utilisation"; the schema says "margin utilisation". Keeping
+# the translation here, rather than teaching the harness about tolerances, is
+# the whole point of the seam.
+python3 - "$VARIANT" "$OUT" "$((END - START))" "$PQ_STATUS" <<'PY'
+import json, os, sys, xml.etree.ElementTree as ET
+
+variant, out, cost, status = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+detail_path = os.path.join(out, f"{variant}-pq-detail.json")
+junit_path  = os.path.join(out, f"{variant}-junit.xml")
+
+detail = {}
+if os.path.exists(detail_path):
+    try:
+        detail = json.load(open(detail_path))
+    except Exception:
+        detail = {}
+
+passed = failed = skipped = None
+if os.path.exists(junit_path):
+    try:
+        root = ET.parse(junit_path).getroot()
+        suites = [root] if root.tag == "testsuite" else root.findall(".//testsuite")
+        tests = sum(int(s.get("tests", 0)) for s in suites)
+        failed = sum(int(s.get("failures", 0)) + int(s.get("errors", 0)) for s in suites)
+        skipped = sum(int(s.get("skipped", 0)) for s in suites)
+        passed = tests - failed - skipped
+    except Exception:
+        pass
+
+if passed is None:
+    passed  = detail.get("passed")
+    failed  = detail.get("failed")
+    skipped = detail.get("skipped", 0)
+
+# `null`, not 0, when nothing measured a margin: 0 would claim perfect headroom.
+margin = detail.get("tolerance_utilisation")
+if margin is None:
+    margin = detail.get("margin_utilisation")
+
+# A qualification that could not run is not a qualification that failed.
+if passed is None and status != 0:
+    passed, failed, skipped = 0, 0, 0
+
+json.dump({
+    "variant": variant,
+    "checks_passed": passed or 0,
+    "checks_failed": failed or 0,
+    "checks_skipped": skipped or 0,
+    "margin_utilisation": margin,
+    "cost_seconds": cost,
+    "detail": detail,
+}, open(os.path.join(out, f"{variant}-qualify.json"), "w"), indent=2)
+
+print(f"{variant}: {passed} passed, {failed} failed, "
+      f"margin utilisation {margin if margin is not None else 'not measured'}")
+PY
+
+exit $PQ_STATUS

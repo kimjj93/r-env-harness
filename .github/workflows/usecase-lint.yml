@@ -1,0 +1,128 @@
+name: usecase-lint
+
+# Domain checks for the R environment use case.
+#
+# These live here, not in skills-lint, because they are opinions about R
+# containers. skills-lint governs every use case and must stay ignorant of all
+# of them; this file is free to know exactly what it is looking at.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Use case lint (R environment)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generated files still say they are generated
+        run: |
+          set -euo pipefail
+          fail=0
+          # The banner is what tells an agent not to hand-edit the file
+          # (AGENTS.md 1.4). Losing the banner disarms the rule silently, which
+          # is worse than losing the file.
+          for f in usecases/r-environment/env/nix/default.nix \
+                   usecases/r-environment/env/nix/.Rprofile; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing"; fail=1; continue
+            fi
+            grep -qi 'GENERATED' "$f" || {
+              echo "::error file=$f::lost its generated-file banner"; fail=1; }
+          done
+          exit $fail
+
+      - name: No floating version pins
+        run: |
+          set -euo pipefail
+          fail=0
+          # A floating tag silently changes the environment underneath you,
+          # which defeats the entire purpose of this use case. An environment
+          # that can change without a commit cannot be submitted as evidence.
+          if grep -rnE '^FROM [^ ]+:latest' usecases/r-environment/env/ 2>/dev/null; then
+            echo "::error::floating ':latest' base image found"; fail=1
+          fi
+          for df in usecases/r-environment/env/renv/Dockerfile \
+                    usecases/r-environment/env/nix/Dockerfile.nix; do
+            [ -f "$df" ] || continue
+            while read -r line; do
+              case "$line" in
+                *"@sha256:"*) ;;
+                *) echo "::error file=$df::base image not pinned by digest: $line"; fail=1 ;;
+              esac
+            done < <(grep '^FROM ' "$df")
+          done
+          exit $fail
+
+      - name: Capability adapters are executable
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          fail=0
+          for cap in build qualify delta candidates; do
+            cmd=$(./harness/usecase cmd "$cap")
+            [ -x "$cmd" ] || { echo "::error::$cmd is not executable"; fail=1; }
+            bash -n "$cmd" || { echo "::error::$cmd does not parse"; fail=1; }
+          done
+          exit $fail
+
+      - name: In-image paths resolve to files that exist
+        run: |
+          set -euo pipefail
+          # The image mirrors the repository layout, so every /project/<X>
+          # referenced anywhere must exist as <X> in the repo.
+          #
+          # This check exists because moving the use case under usecases/ broke
+          # five such paths, and the only thing that noticed was a container
+          # build failing two minutes in -- after a full image build. One of
+          # them was additionally masked by `|| true` on the manifest step, so
+          # the image built "successfully" while producing no manifest at all.
+          # A path that can be verified in milliseconds should never be
+          # discovered by a build, and evidence generation must never be
+          # allowed to fail quietly.
+          fail=0
+          grep -rhoE '/project/[A-Za-z0-9._/-]+' \
+            .github/workflows/ usecases/*/bin/ usecases/*/env/ 2>/dev/null \
+            | sort -u | while read -r p; do
+              rel="${p#/project/}"
+              # Runtime mounts and files the image generates for itself have
+              # no repository counterpart by design.
+              case "$rel" in
+                artifacts*|out*|baseline*|candidate*) continue ;;   # mounted at run time
+                manifest.json|renv.lock|.Rprofile) continue ;;      # written during build
+              esac
+              [ -e "$rel" ] || { echo "::error::in-image path /project/$rel has no counterpart at ./$rel"; exit 1; }
+            done || fail=1
+          exit $fail
+
+      - name: Evidence generation is never masked
+        run: |
+          set -euo pipefail
+          # `|| true` on a step that produces submission evidence turns a hard
+          # failure into a silently missing artifact. If a manifest cannot be
+          # generated, that is a finding, not something to shrug off.
+          if grep -rn 'image_manifest.*|| true' usecases/*/env/ 2>/dev/null; then
+            echo "::error::manifest generation must not be masked with '|| true'"
+            exit 1
+          fi
+
+      - name: R scripts parse
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq r-base-core >/dev/null
+          fail=0
+          # Currently covers harness/**.R as well as this use case's own R.
+          # That is a known wrinkle: the harness's own tooling is written in R,
+          # so a non-R adopter inherits an R dependency they do not want. See
+          # the portability limitation in README.md.
+          while read -r f; do
+            Rscript -e "tryCatch({parse('$f'); cat('ok  $f\n')}, error=function(e){cat('FAIL $f:', conditionMessage(e), '\n'); quit(status=1)})" || fail=1
+          done < <(find harness usecases/r-environment -name '*.R')
+          exit $fail

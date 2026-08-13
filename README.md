@@ -1,13 +1,64 @@
 # r-env-harness
 
-**Harness Engineering for Statistical Programming** — a working reference
-implementation of a human-in-the-loop, agent-driven workflow for building
-**reproducible, validated R environments** with the evidence trail a regulated
-submission requires.
+**Harness Engineering for Statistical Programming** — a general-purpose,
+human-in-the-loop, agent-driven workflow, plus one worked example that proves
+it does something real.
 
 The premise: AI agents do the work autonomously on branches, an unattended
 research loop fine-tunes proposals in the background using measured metrics,
 and a human only ever has to do one thing — **approve or deny a pull request**.
+
+---
+
+## Two layers, and the seam between them
+
+This repository is deliberately **two things**, and they are separated by a gate
+rather than by good intentions.
+
+| Layer | What it is | Where it lives |
+|---|---|---|
+| **The harness** | The reusable part: governance, PR gates, the agent race, AI review, the research loop, the learning log, the evidence schema | repository root |
+| **The use case** | One worked example: reproducible R environments for regulatory submission | `usecases/r-environment/` |
+
+The seam is a single file, `harness.yml`, which declares what the harness is
+governing and the five commands it may invoke. **The harness never reads inside
+the use case directory.** It asks.
+
+```yaml
+capabilities:
+  build:       # materialise a candidate state
+  qualify:     # prove it correct -> JUnit + metrics
+  delta:       # compare against a baseline -> reviewable report + verdict
+  candidates:  # what the research loop may vary
+  apply:       # write a winning candidate into the repo
+```
+
+Implement those five for your domain and the entire harness works on it
+unchanged — the race, the nightly research loop, the weekly proposal, the
+scoreboard, the learning log.
+
+```bash
+./tools/extract-template.sh ../my-harness   # scaffold + stub, verified on the way out
+cd ../my-harness && ./harness/check_boundary
+```
+
+### Why there is a gate and not just a convention
+
+A documented separation lasts about three pull requests. Someone adds a domain
+path to a scaffold workflow because it is the quickest way to make something
+work, it looks like every other line in review, and six months later the
+"portable" harness only builds R containers.
+
+So `harness/check_boundary` runs on every PR and fails the build if a harness
+file names a use case path or a domain tool. When it was first switched on it
+found **50 violations** in code that had been written as though the separation
+already existed. That is the number that justifies the gate.
+
+It also prints, without failing, what the harness itself needs installed —
+currently `bash`, `python3` and `Rscript`. The `Rscript` is a genuine wart: the
+harness's own tooling is written in R, so a Python or SAS team adopting the
+scaffold inherits a dependency they do not want. Reported rather than hidden;
+see *Honest limitations*.
 
 ---
 
@@ -152,6 +203,49 @@ by making the base digest itself a research candidate the nightly loop tracks.
 | `nightly-research.yml` | nightly cron | Explores candidate upgrades; writes to the `research/telemetry` branch | **zero** |
 | `weekly-proposal.yml` | Monday cron | Aggregates the week and opens **at most one** PR | **~1 review/week** |
 | `skills-drift.yml` | push to `main` | Detects instructions that no longer match reality | occasional |
+| `learning-promote.yml` | every PR / Monday cron | Validates the learning log; proposes a lesson for the contract once it has recurred | rare |
+
+### The repository remembers its own mistakes
+
+`skills-drift.yml` catches *mechanical* drift — a skill referencing a path that
+no longer exists. It cannot catch a rule that is present, accurate, and still
+misread every time somebody works here. That knowledge only exists in what the
+work taught us, so it is written down.
+
+`evidence/learnings.jsonl` is an append-only log of observations, classified by
+whether the gap was **context**, **instruction**, **workflow**, or **failure**
+(the four signal types from Martin Fowler's [feedback flywheel][ff]). Agents are
+instructed to append to it (`AGENTS.md` §10); it costs one command.
+
+Recording is cheap on purpose. **Promotion is not.** `learning-promote.yml`
+surfaces a lesson in `AGENTS.md` only once it has been recorded **twice**, on the
+reasoning that one occurrence is an anecdote and two in different places is a
+property of how this repository is built. Without that threshold the contract
+grows until agents skim it, and a skimmed contract governs nothing.
+
+The seeded log already contains two lessons that recurred during construction —
+the same metric field-name mismatch made in two different scripts, and two gates
+that degraded silently rather than failing.
+
+[ff]: https://martinfowler.com/articles/reduce-friction-ai/feedback-flywheel.html
+
+### Measuring the agents, not just the environment
+
+The 26 telemetry fields per research run all describe the *environment*. None of
+them says whether an agent reading `AGENTS.md` could do the job.
+`harness/agent_metrics.R` closes that gap from data the repository already
+produces, and reports it in the weekly proposal:
+
+- **first-pass acceptance** — share of PRs whose *first* gate run passed
+- **iteration cycles** — gate runs needed before the first green
+- **never green** — opened, iterated, still failing
+
+Human-authored PRs are measured alongside as a control: if agents need three
+attempts where humans need one, the contract is underspecified; if both need
+three, the gate is flaky and rewriting the contract would treat the wrong cause.
+
+Deliberately **not** measured: lines changed, commits, time to first push. Volume
+is not the constraint here — review capacity is.
 
 ### The research loop is the autopilot
 
@@ -193,6 +287,11 @@ Failing validation is disqualifying, not a scoring penalty.
 
 ## Getting started
 
+> **Running this on a team?** [`docs/OPERATING-MANUAL.md`](docs/OPERATING-MANUAL.md)
+> is the practical companion to this file: what you do each week, how to read a
+> failure, and the failure modes we have already hit.
+
+
 ```bash
 gh repo clone kimjj93/r-env-harness && cd r-env-harness
 
@@ -213,22 +312,56 @@ To start an agent race:
 gh workflow run agent-race.yml -f task="Advance the PPM snapshot to 2025-04-01"
 ```
 
+### One-time setup: `HARNESS_BOT_TOKEN`
+
+Before the first race, create a PAT and store it as a repository secret:
+
+```bash
+gh secret set HARNESS_BOT_TOKEN   # paste a PAT with repo (or Issues + PRs) scope
+```
+
+This is **required**, not optional. GitHub refuses to assign a coding agent
+using `GITHUB_TOKEN` — `replaceActorsForAssignable` returns `FORBIDDEN` for App
+installation tokens — and `copilot-swe-agent` is not even visible to that token.
+The same secret also makes workflow-opened PRs trigger the validation gate
+automatically. See [`GOVERNANCE.md`](GOVERNANCE.md) for the detail.
+
+Without it the harness still works; you just have to close-and-reopen
+agent-opened PRs by hand, and `agent-race` will refuse to run.
+
 ---
 
 ## Repository map
 
 ```
-AGENTS.md              the contract every agent reads — start here
-GOVERNANCE.md          who may merge, and what AI may never do
-skills/                vendor-neutral capability specs (SKILL.md)
-env/renv/              Track A: lockfile, digest-pinned Dockerfile, PPM pin
-env/nix/               Track B: rix generator, default.nix, Nix image
-env/images/            images.lock.json — the APPROVED pin (ledger: evidence/images)
-analysis/              the ADaM payload (ADSL, ADAE)
-validation/            three-phase PQ framework, fixtures, testcases
-harness/               delta engine, manifests, metrics, scoreboard
-harness/research/      candidates.yml, aggregate.R, propose.R
-evidence/              committed audit trail: metrics, manifests, proposals
+── the harness (portable; this is what extract-template.sh lifts out) ─────────
+AGENTS.md                     the contract every agent reads — start here
+GOVERNANCE.md                 who may merge, and what AI may never do
+harness.yml                   THE SEAM — declares the use case and its verbs
+harness/usecase               the dispatcher; the only reader of harness.yml
+harness/check_boundary        fails CI if the harness learns about the domain
+harness/scoreboard.R          ranks competing agents on evidence, not prose
+harness/research/             aggregate.R, propose.R — the autopilot's brain
+skills/                       harness skills (research-loop)
+docs/schema/evidence.md       the vocabulary every use case reports in
+tools/extract-template.sh     lift the harness out, verified on the way out
+.github/workflows/*.yml       scaffold gates (no `usecase-` prefix)
+
+── the use case (swappable; one worked example) ───────────────────────────────
+usecases/r-environment/
+  AGENTS.md                   domain rules, additional to the root contract
+  bin/                        the five capability adapters
+  env/renv/                   Track A: lockfile, digest-pinned Dockerfile, PPM pin
+  env/nix/                    Track B: rix generator, default.nix, Nix image
+  env/images/                 images.lock.json — the APPROVED pin
+  analysis/                   the ADaM payload (ADSL, ADAE)
+  validation/                 three-phase PQ framework, fixtures, testcases
+  skills/                     domain skills (env-delta, PQ, package-risk, ...)
+  candidates.yml              what the research loop may vary
+.github/workflows/usecase-*   domain gates (build, publish, fixtures, lint)
+
+── produced, not authored ─────────────────────────────────────────────────────
+evidence/                     committed audit trail: metrics, verdicts, learnings
 ```
 
 ---
@@ -244,6 +377,13 @@ evidence/              committed audit trail: metrics, manifests, proposals
   unavailable in nixpkgs; those candidates are recorded as `unsupported` rather
   than worked around.
 - **Nix builds are slow without the `rstats-on-nix` Cachix cache.**
+- **The harness's own tooling is written in R.** `check_boundary` reports this
+  on every run. It is a portability wart, not a coupling: the harness does not
+  *know* anything about R environments, it merely happens to be implemented in
+  R. A non-R team adopting the scaffold still has to install R to run the
+  scoreboard and the research aggregator. Porting that tooling to Python is
+  tracked as follow-up work; it is deliberately not bundled into the
+  restructuring PR, because a change that large is a change nobody reviews.
 - **Agent availability varies by account and plan.** A racer that cannot be
   assigned is skipped with a warning; a two-way race is still a race.
 - **`{riskmetric}` is being succeeded by `{val.meter}`** by the R Validation

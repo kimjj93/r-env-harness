@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# harness/check_boundary — fail if the harness has learned about the domain.
+#
+# A separation that is only documented is a separation that lasts about three
+# pull requests. Someone adds `env/renv/Dockerfile` to a scaffold workflow
+# because it is the quickest way to make something work, nobody notices in
+# review because it looks like every other line, and six months later the
+# "portable" harness only builds R containers.
+#
+# So the boundary is a gate, not a convention.
+#
+# Two rules:
+#   1. Harness files may not name a path inside the use case root.
+#      They dispatch through harness/usecase, which reads harness.yml.
+#   2. Harness files may not use the domain's vocabulary.
+#      Naming a tool is how knowledge of it creeps in.
+#
+# The use case may reference the harness freely. Dependency points one way.
+
+set -euo pipefail
+
+MANIFEST="${HARNESS_MANIFEST:-harness.yml}"
+ROOT="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['usecase']['root'].rstrip('/'))" "$MANIFEST")"
+
+fail=0
+note() { printf '::error file=%s,line=%s::%s\n' "$1" "$2" "$3"; fail=1; }
+
+# Files the harness owns. Everything else is either the use case or inert.
+harness_files() {
+  {
+    printf '%s\n' AGENTS.md GOVERNANCE.md README.md harness.yml
+    find harness -type f 2>/dev/null
+    find skills  -type f -name '*.md' 2>/dev/null
+    find docs    -type f -name '*.md' 2>/dev/null
+    find tools   -type f 2>/dev/null
+    # Scaffold workflows only. `usecase-` prefixed ones belong to the domain.
+    find .github/workflows -type f -name '*.yml' 2>/dev/null | grep -v '/usecase-'
+  } | sort -u
+}
+
+# ---------------------------------------------------------------------------
+# Rule 1: no hard-coded use case paths.
+# ---------------------------------------------------------------------------
+echo "Checking that no harness file hard-codes a path inside $ROOT ..."
+while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  # Documentation may *discuss* the boundary; it may not be executable coupling.
+  # We allow the literal root only where it is quoted as an example in prose.
+  while IFS=: read -r line content; do
+    # Two files may name the use case root, for the same reason: naming the
+    # seam is their entire job. `harness.yml` declares where the seam is, and
+    # the extractor writes a new one. Neither is the harness *learning* about a
+    # domain; both are the harness describing the shape of the hole.
+    #
+    # This is the only exemption, and it is structural rather than convenient.
+    # If you find yourself wanting to add a third, that is the signal you are
+    # about to couple the harness to something.
+    case "$f" in
+      harness.yml|tools/extract-template.sh) continue ;;
+      # Descriptive prose may describe the repository as it actually is,
+      # example use case included, or nobody can find anything. AGENTS.md and
+      # GOVERNANCE.md are deliberately NOT on this list: they are the contract,
+      # they travel with the template, and a contract that names one domain's
+      # files is a contract that only works for one domain.
+      README.md|docs/*) continue ;;
+    esac
+    case "$content" in
+      *"harness/usecase"*)  continue ;;   # dispatching, not coupling
+      \#*|*"# "*"$ROOT"*)   continue ;;   # a comment about the boundary
+      *'`'"$ROOT"*)         continue ;;   # inline code in prose
+    esac
+    note "$f" "$line" "harness file hard-codes a use case path: ${content## }"
+  done < <(grep -nE "(^|[^a-zA-Z0-9_/-])$ROOT/" "$f" 2>/dev/null || true)
+done < <(harness_files)
+
+# ---------------------------------------------------------------------------
+# Rule 2: no domain vocabulary in harness machinery.
+# ---------------------------------------------------------------------------
+# Note what is NOT on this list: `Rscript`, `testthat`. The language the harness
+# happens to be written in is a different question from whether the harness
+# knows what it is governing, and conflating them produces a gate nobody can
+# satisfy. Toolchain dependencies are reported separately, below.
+#
+# Prose is exempt: README and docs must be able to say what the example use case
+# is, or nobody can understand the repository. Executable files are not exempt,
+# because that is where coupling does damage.
+echo "Checking that no harness script uses domain vocabulary ..."
+DOMAIN_WORDS='renv|nixpkgs|rocker|riskmetric|pharmaverse|ADaM|ADSL|ADAE|PPM_SNAPSHOT|NIXPKGS_DATE|\.Rprofile|\bCRAN\b|\bBLAS\b|\bLAPACK\b|posit\.co'
+
+while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.md) continue ;;               # prose may name the example
+    harness.yml) continue ;;        # the seam names the domain by design
+    harness/check_boundary) continue ;;  # this file lists the words
+  esac
+  while IFS=: read -r line content; do
+    note "$f" "$line" "harness file names a domain tool: ${content## }"
+  done < <(grep -nEi "$DOMAIN_WORDS" "$f" 2>/dev/null || true)
+done < <(harness_files)
+
+# ---------------------------------------------------------------------------
+# Rule 3: the use case must actually implement the contract.
+# ---------------------------------------------------------------------------
+echo "Checking that the use case implements every declared capability ..."
+harness/usecase check || fail=1
+
+# ---------------------------------------------------------------------------
+# Rule 4: the use case must carry its own contract.
+# ---------------------------------------------------------------------------
+if [ ! -f "$ROOT/AGENTS.md" ]; then
+  echo "::error::$ROOT has no AGENTS.md; domain rules have nowhere to live"
+  fail=1
+fi
+
+# ---------------------------------------------------------------------------
+# Report (do not fail on) the harness's own toolchain.
+# ---------------------------------------------------------------------------
+# This is not a boundary violation, it is a portability cost. A team adopting
+# the scaffold has to install whatever appears here before anything runs, so it
+# should be visible rather than discovered.
+echo
+echo "Harness toolchain — what adopting this scaffold requires installing:"
+{
+  grep -rhoE '^#!/usr/bin/env [a-zA-Z0-9_]+' harness tools 2>/dev/null | awk '{print $2}'
+  grep -rhoE '\b(Rscript|python3|node|deno) ' harness .github/workflows/*.yml 2>/dev/null \
+    | grep -v usecase- | tr -d ' '
+} | sort -u | sed 's/^/  /'
+
+if [ "$fail" -eq 0 ]; then
+  echo
+  echo "Boundary intact: the harness does not know what it is governing."
+else
+  cat >&2 <<'MSG'
+
+The harness has learned something about its use case.
+
+Fix by moving the knowledge to where it belongs:
+  * a path        -> get it from `harness/usecase root` or a capability command
+  * a build step  -> put it in the use case's bin/ adapter
+  * a new need    -> propose a new capability verb in harness.yml, in its own PR
+
+Do not add an exception here. The whole value of the gate is that it has none.
+MSG
+fi
+exit $fail

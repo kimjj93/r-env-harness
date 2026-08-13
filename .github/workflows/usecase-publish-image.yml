@@ -1,0 +1,217 @@
+name: publish-image
+
+# Publishes signed, immutable images to GHCR — but ONLY after a human has
+# merged to main. A PR can build an image; it can never publish one. That
+# ordering is what makes the registry a trustworthy record: every published
+# digest corresponds to a commit some human approved.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'usecases/r-environment/env/**'
+      - 'usecases/r-environment/analysis/**'
+      - 'usecases/r-environment/validation/**'
+      - 'harness/**'
+      - '.github/workflows/publish-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write      # to commit the digest lock back
+  packages: write      # to push to GHCR
+  id-token: write      # for cosign keyless signing
+  attestations: write
+
+concurrency:
+  group: publish-image
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve pins
+        id: pin
+        run: |
+          set -euo pipefail
+          echo "snapshot=$(grep '^PPM_SNAPSHOT=' usecases/r-environment/env/renv/ppm-snapshot.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "nixdate=$(grep '^NIXPKGS_DATE=' usecases/r-environment/env/nix/nixpkgs-pin.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Track A
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: usecases/r-environment/env/renv/Dockerfile
+          build-args: |
+            PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }}
+          # Tagged by commit SHA, never 'latest', so an image maps 1:1 to a
+          # reviewed commit and can never be silently replaced.
+          tags: ${{ env.IMAGE_BASE }}/renv:${{ github.sha }}
+          push: true
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=renv
+          cache-to: type=gha,mode=max,scope=renv
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image (keyless)
+        run: |
+          set -euo pipefail
+          # Keyless OIDC signing: provenance without key management.
+          cosign sign --yes \
+            "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          artifact-name: sbom-renv.spdx.json
+          output-file: sbom-renv.spdx.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/renv
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Extract and archive the environment manifest
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/manifests
+          docker run --rm \
+            -e HARNESS_TRACK=renv \
+            -e PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }} \
+            -v "${{ github.workspace }}/evidence/manifests:/out" \
+            "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}" \
+            Rscript /project/usecases/r-environment/bin/image_manifest.R /out/renv-${{ github.sha }}.json
+          cp "evidence/manifests/renv-${{ github.sha }}.json" \
+             "evidence/manifests/renv-latest.json"
+
+      - name: Run PQ inside the published image and archive results
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts evidence/metrics
+          docker run --rm \
+            -e ARTIFACT_DIR=/project/artifacts \
+            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
+            "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}" \
+            Rscript /project/usecases/r-environment/validation/run-validation.R
+          cp artifacts/pq-summary.json evidence/metrics/pq-renv-latest.json
+
+      - name: Append to the image evidence ledger
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          SNAPSHOT: ${{ steps.pin.outputs.snapshot }}
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          BASE_DIGEST: sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
+          LEDGER_BRANCH: evidence/images
+        run: |
+          set -euo pipefail
+          # The digest lock is the bridge between "the code we reviewed" and
+          # "the bits that ran" (skills/submission-evidence/SKILL.md).
+          #
+          # It deliberately does NOT get committed to main. An earlier version
+          # pushed straight to main and was rejected by the ruleset - correctly,
+          # because "never commit directly to main" has no exceptions, least of
+          # all for the workflow that produces the audit trail.
+          #
+          # Opening a PR instead would be worse: merging it publishes a new
+          # image, which locks a new digest, which opens another PR, forever.
+          #
+          # So build evidence accumulates on an append-only ledger branch, the
+          # same pattern the nightly research loop already uses. It is immutable
+          # git history, auditable, and costs zero human review. The copy of
+          # images.lock.json on main stays what a human approved: the pin of the
+          # currently accepted environment, moved only by a reviewed PR.
+          LEDGER=$(mktemp -d)
+          git clone -q --depth 1 --branch "$LEDGER_BRANCH" \
+            "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$LEDGER" 2>/dev/null && EXISTS=1 || EXISTS=0
+
+          if [ "$EXISTS" = "0" ]; then
+            # The first clone may have left a partial directory behind, and
+            # git refuses to clone into a non-empty one.
+            rm -rf "$LEDGER"; mkdir -p "$LEDGER"
+            git clone -q --depth 1 \
+              "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" \
+              "$LEDGER"
+            git -C "$LEDGER" checkout -q --orphan "$LEDGER_BRANCH"
+            git -C "$LEDGER" rm -rq --cached . || true
+            find "$LEDGER" -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+          fi
+
+          mkdir -p "$LEDGER/manifests" "$LEDGER/metrics"
+          cp -a evidence/manifests/. "$LEDGER/manifests/" 2>/dev/null || true
+          cp -a evidence/metrics/.   "$LEDGER/metrics/"   2>/dev/null || true
+
+          LOCK="$LEDGER/images.lock.json" python3 - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path(os.environ["LOCK"])
+          data = json.loads(p.read_text()) if p.exists() else {"images": {}}
+          sha = os.environ["GITHUB_SHA"]
+          data["images"][sha] = {
+              "renv": {
+                  "repository": os.environ["IMAGE_BASE"] + "/renv",
+                  "digest": os.environ["DIGEST"],
+                  "ppm_snapshot": os.environ["SNAPSHOT"],
+                  "base_digest": os.environ["BASE_DIGEST"],
+                  "signed": True,
+              }
+          }
+          data["current"] = sha
+          p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          print("locked", sha, os.environ["DIGEST"])
+          PY
+
+          cd "$LEDGER"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::notice::Ledger already current; nothing to append."
+            exit 0
+          fi
+          git commit -q \
+            -m "evidence(images): lock ${GITHUB_SHA} to ${DIGEST}" \
+            -m "Published from ${GITHUB_REPOSITORY}@${GITHUB_SHA} by run ${GITHUB_RUN_ID}."
+          git push -q origin "HEAD:${LEDGER_BRANCH}"
+          echo "Appended to $LEDGER_BRANCH"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Published image"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| repository | \`${{ env.IMAGE_BASE }}/renv\` |"
+            echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
+            echo "| commit | \`${{ github.sha }}\` |"
+            echo "| PPM snapshot | ${{ steps.pin.outputs.snapshot }} |"
+            echo "| signed | cosign keyless |"
+            echo ""
+            echo "Pull by digest (immutable):"
+            echo '```'
+            echo "docker pull ${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

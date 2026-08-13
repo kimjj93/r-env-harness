@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# harness/usecase — the only thing that knows harness.yml exists.
+#
+# Scaffold workflows call this. They never name a domain path, so they keep
+# working when the domain changes. Every path a scaffold workflow needs comes
+# out of here.
+#
+#   harness/usecase id                 -> the id declared in harness.yml
+#   harness/usecase root               -> the directory it points at
+#   harness/usecase variants           -> alpha\nbeta
+#   harness/usecase variant-name alpha -> Track A
+#   harness/usecase has build          -> exit 0 if declared
+#   harness/usecase cmd build          -> <root>/bin/build
+#   harness/usecase run build alpha    -> executes it
+#   harness/usecase scoring            -> field:direction per line
+#   harness/usecase check              -> validate the manifest itself
+#
+# Deliberately implemented in bash with python3 for YAML: the harness must not
+# require the use case's language to be installed in order to dispatch to it.
+
+set -euo pipefail
+
+MANIFEST="${HARNESS_MANIFEST:-harness.yml}"
+
+die() { printf 'harness/usecase: %s\n' "$*" >&2; exit 1; }
+
+[ -f "$MANIFEST" ] || die "no manifest at $MANIFEST"
+
+py() { python3 -c "$1" "$MANIFEST" "${@:2}"; }
+
+READ='
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+'
+
+case "${1:-}" in
+
+  id)
+    py "$READ"'print(m["usecase"]["id"])' ;;
+
+  root)
+    py "$READ"'print(m["usecase"]["root"].rstrip("/"))' ;;
+
+  name)
+    py "$READ"'print(m["usecase"].get("name", m["usecase"]["id"]))' ;;
+
+  variants)
+    py "$READ"'
+for v in m.get("variants") or []:
+    print(v["id"])' ;;
+
+  variant-name)
+    [ $# -ge 2 ] || die "variant-name needs a variant id"
+    py "$READ"'
+want = sys.argv[2]
+for v in m.get("variants") or []:
+    if v["id"] == want:
+        print(v.get("name", want)); break
+else:
+    sys.exit("unknown variant: " + want)' "$2" ;;
+
+  has)
+    [ $# -ge 2 ] || die "has needs a capability name"
+    py "$READ"'
+sys.exit(0 if sys.argv[2] in (m.get("capabilities") or {}) else 1)' "$2" ;;
+
+  cmd)
+    [ $# -ge 2 ] || die "cmd needs a capability name"
+    py "$READ"'
+c = (m.get("capabilities") or {}).get(sys.argv[2])
+if not c: sys.exit("capability not declared: " + sys.argv[2])
+if not c.get("cmd"):
+    sys.exit("capability " + sys.argv[2] + " is workflow-backed, not a command")
+print(c["cmd"])' "$2" ;;
+
+  workflow)
+    [ $# -ge 2 ] || die "workflow needs a capability name"
+    py "$READ"'
+c = (m.get("capabilities") or {}).get(sys.argv[2]) or {}
+print(c.get("workflow", ""))' "$2" ;;
+
+  timeout)
+    [ $# -ge 2 ] || die "timeout needs a capability name"
+    py "$READ"'
+c = (m.get("capabilities") or {}).get(sys.argv[2]) or {}
+print(c.get("timeout_minutes", 30))' "$2" ;;
+
+  scoring)
+    py "$READ"'
+for s in m.get("scoring") or []:
+    print(f'"'"'{s["field"]}:{s["direction"]}'"'"')' ;;
+
+  # Emit variants as a JSON array, for GitHub Actions matrix fan-out.
+  matrix)
+    py "$READ"'
+import json
+print(json.dumps([{"id": v["id"], "name": v.get("name", v["id"])}
+                  for v in (m.get("variants") or [])]))' ;;
+
+  run)
+    [ $# -ge 2 ] || die "run needs a capability name"
+    cap="$2"; shift 2
+    cmd="$("$0" cmd "$cap")"
+    [ -x "$cmd" ] || die "capability '$cap' declares '$cmd', which is not executable"
+    exec "$cmd" "$@" ;;
+
+  check)
+    py "$READ"'
+import os
+errs = []
+if m.get("schema") != 1:
+    errs.append("schema must be 1")
+uc = m.get("usecase") or {}
+for k in ("id", "root"):
+    if not uc.get(k): errs.append(f"usecase.{k} is required")
+root = (uc.get("root") or "").rstrip("/")
+if root and not os.path.isdir(root):
+    errs.append(f"usecase.root does not exist: {root}")
+
+vs = m.get("variants") or []
+if not vs: errs.append("at least one variant is required")
+ids = [v.get("id") for v in vs]
+if len(ids) != len(set(ids)): errs.append("variant ids must be unique")
+
+caps = m.get("capabilities") or {}
+for required in ("build", "qualify", "delta", "candidates"):
+    if required not in caps:
+        errs.append(f"capability {required} is required")
+for name, c in caps.items():
+    c = c or {}
+    cmd, wf = c.get("cmd"), c.get("workflow")
+    if cmd and wf:
+        errs.append(f"capability {name} declares both cmd and workflow")
+        continue
+    if wf:
+        # Workflow-backed capabilities are for things that genuinely need the
+        # CI platform (OIDC, attestation). They must be use-case-owned, which
+        # the usecase- filename prefix makes visible in one listing.
+        if not os.path.basename(wf).startswith("usecase-"):
+            errs.append(f"capability {name} names a workflow without the "
+                        f"usecase- prefix: {wf}")
+        if not os.path.exists(wf):
+            errs.append(f"capability {name} points at a missing workflow: {wf}")
+        continue
+    if not cmd:
+        errs.append(f"capability {name} declares neither cmd nor workflow"); continue
+    # A capability must live inside the use case. A capability that reaches
+    # into the harness would let the domain edit its own referee.
+    if root and not cmd.startswith(root + "/"):
+        errs.append(f"capability {name} points outside {root}: {cmd}")
+    if not os.path.exists(cmd):
+        errs.append(f"capability {name} points at a missing file: {cmd}")
+    elif not os.access(cmd, os.X_OK):
+        errs.append(f"capability {name} is not executable: {cmd}")
+
+known = {"verdict", "margin_utilisation", "change_magnitude",
+         "cost_seconds", "checks_failed", "artifact_size_mb"}
+for s in m.get("scoring") or []:
+    fld = s.get("field")
+    if fld not in known:
+        errs.append("scoring field is not in the evidence schema: "
+                    + str(fld) + " (see docs/schema/evidence.md)")
+
+if errs:
+    for e in errs: print("::error::" + e)
+    sys.exit(1)
+print("manifest OK: " + uc["id"] + " -> " + root + ", "
+      + str(len(vs)) + " variant(s), " + str(len(caps)) + " capability(ies)")' ;;
+
+  ""|-h|--help|help)
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+
+  *)
+    die "unknown command: $1 (try --help)" ;;
+esac
