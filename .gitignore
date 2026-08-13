@@ -18,3 +18,10 @@ renv/staging/
 
 # Local build scratch
 .harness-probe
+
+# Scratch copied out of a container for inspection. The risk-scan work pulled
+# the image's R library onto the runner with `docker cp`; a stray `git add -A`
+# then committed 97 files of MASS and stats package internals to the repo root.
+# Extraction targets belong here, not in a commit.
+/*-tests/
+/.image-lib/
