@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Emit a normalised environment manifest from INSIDE a container image.
 #
-#   Rscript harness/image_manifest.R [output.json]
+#   Rscript usecases/r-environment/bin/image_manifest.R [output.json]
 #
 # This is what the environment actually IS, as opposed to what the lockfile
 # requested. The distinction matters: a lockfile is an intention, a manifest is

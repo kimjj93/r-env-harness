@@ -54,11 +54,11 @@ COPY usecases/r-environment/env/nix/.Rprofile /project/.Rprofile
 COPY usecases/r-environment/analysis/    /project/usecases/r-environment/analysis/
 COPY usecases/r-environment/validation/  /project/usecases/r-environment/validation/
 COPY usecases/r-environment/bin/       /project/usecases/r-environment/bin/
-COPY harness/         /project/harness/
+COPY harness.yml      /project/harness.yml
 
 # Put the pinned R on PATH so `Rscript ...` resolves to the Nix-built one.
 ENV PATH=/build/result/bin:$PATH
 
-RUN Rscript /project/harness/image_manifest.R /project/manifest.json || true
+RUN Rscript /project/usecases/r-environment/bin/image_manifest.R /project/manifest.json
 
 CMD ["R"]

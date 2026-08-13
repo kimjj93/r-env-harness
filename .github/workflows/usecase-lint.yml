@@ -73,6 +73,46 @@ jobs:
           done
           exit $fail
 
+      - name: In-image paths resolve to files that exist
+        run: |
+          set -euo pipefail
+          # The image mirrors the repository layout, so every /project/<X>
+          # referenced anywhere must exist as <X> in the repo.
+          #
+          # This check exists because moving the use case under usecases/ broke
+          # five such paths, and the only thing that noticed was a container
+          # build failing two minutes in -- after a full image build. One of
+          # them was additionally masked by `|| true` on the manifest step, so
+          # the image built "successfully" while producing no manifest at all.
+          # A path that can be verified in milliseconds should never be
+          # discovered by a build, and evidence generation must never be
+          # allowed to fail quietly.
+          fail=0
+          grep -rhoE '/project/[A-Za-z0-9._/-]+' \
+            .github/workflows/ usecases/*/bin/ usecases/*/env/ 2>/dev/null \
+            | sort -u | while read -r p; do
+              rel="${p#/project/}"
+              # Runtime mounts and files the image generates for itself have
+              # no repository counterpart by design.
+              case "$rel" in
+                artifacts*|out*|baseline*|candidate*) continue ;;   # mounted at run time
+                manifest.json|renv.lock|.Rprofile) continue ;;      # written during build
+              esac
+              [ -e "$rel" ] || { echo "::error::in-image path /project/$rel has no counterpart at ./$rel"; exit 1; }
+            done || fail=1
+          exit $fail
+
+      - name: Evidence generation is never masked
+        run: |
+          set -euo pipefail
+          # `|| true` on a step that produces submission evidence turns a hard
+          # failure into a silently missing artifact. If a manifest cannot be
+          # generated, that is a finding, not something to shrug off.
+          if grep -rn 'image_manifest.*|| true' usecases/*/env/ 2>/dev/null; then
+            echo "::error::manifest generation must not be masked with '|| true'"
+            exit 1
+          fi
+
       - name: R scripts parse
         run: |
           set -euo pipefail

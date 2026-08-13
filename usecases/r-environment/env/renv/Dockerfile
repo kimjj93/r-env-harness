@@ -127,9 +127,9 @@ RUN R -q -e "renv::restore(lockfile = '/project/renv.lock', clean = TRUE, prompt
 COPY usecases/r-environment/analysis/    /project/usecases/r-environment/analysis/
 COPY usecases/r-environment/validation/  /project/usecases/r-environment/validation/
 COPY usecases/r-environment/bin/       /project/usecases/r-environment/bin/
-COPY harness/         /project/harness/
+COPY harness.yml      /project/harness.yml
 
 # Record what was actually installed, baked into the image itself.
-RUN R -q -f /project/harness/image_manifest.R --args /project/manifest.json || true
+RUN R -q -f /project/usecases/r-environment/bin/image_manifest.R --args /project/manifest.json
 
 CMD ["R"]

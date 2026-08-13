@@ -115,7 +115,7 @@ jobs:
             -e ARTIFACT_DIR=/project/artifacts \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}" \
-            Rscript /project/validation/run-validation.R
+            Rscript /project/usecases/r-environment/validation/run-validation.R
           cp artifacts/pq-summary.json evidence/metrics/pq-renv-latest.json
 
       - name: Append to the image evidence ledger

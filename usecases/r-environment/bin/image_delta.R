@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Four-layer environment delta.
 #
-#   Rscript harness/image_delta.R <baseline_manifest.json> <candidate_manifest.json> \
+#   Rscript usecases/r-environment/bin/image_delta.R <baseline_manifest.json> <candidate_manifest.json> \
 #                                 [output_dir] [baseline_pq.json] [candidate_pq.json]
 #
 # Layer 1  image digest   -> did anything change at all?

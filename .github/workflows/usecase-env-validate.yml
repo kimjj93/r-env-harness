@@ -101,7 +101,7 @@ jobs:
             -e HARNESS_TRACK=renv \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/validation/run-validation.R
+            Rscript /project/usecases/r-environment/validation/run-validation.R
           echo "status=$?" >> "$GITHUB_OUTPUT"
 
       - name: Extract environment manifest

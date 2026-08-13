@@ -79,9 +79,9 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "${{ github.workspace }}/validation/fixtures:/project/validation/fixtures" \
+            -v "${{ github.workspace }}/usecases/r-environment/validation/fixtures:/project/usecases/r-environment/validation/fixtures" \
             r-env-harness/renv:fixtures \
-            Rscript /project/validation/build-fixtures.R
+            Rscript /project/usecases/r-environment/validation/build-fixtures.R
           # The container writes as root; hand the files back to the runner user
           # so the checkout action can commit them.
           sudo chown -R "$(id -u):$(id -g)" usecases/r-environment/validation/fixtures
@@ -93,10 +93,10 @@ jobs:
           docker run --rm \
             -e ARTIFACT_DIR=/project/artifacts \
             -e HARNESS_TRACK=renv \
-            -v "${{ github.workspace }}/validation/fixtures:/project/validation/fixtures" \
+            -v "${{ github.workspace }}/usecases/r-environment/validation/fixtures:/project/usecases/r-environment/validation/fixtures" \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:fixtures \
-            Rscript /project/validation/run-validation.R
+            Rscript /project/usecases/r-environment/validation/run-validation.R
           # A freshly built baseline that does not reproduce in the very image
           # that produced it means the payload is non-deterministic. That is a
           # defect in the analysis code, not a reason to relax the comparison.
