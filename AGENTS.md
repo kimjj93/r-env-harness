@@ -278,6 +278,15 @@ Read this before you start. These are not hypothetical.
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 
+**unverified-external-semantics** — seen 4 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
+
+- The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
+- Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
+- Prepending the image library to .libPaths() shadowed the runner's base R and broke the scanner _(failure, pr:29)_
+- The first working scores would have blocked every candidate on properties of R itself _(failure, pr:29)_
+
+  Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
+
 **metric-field-mismatch** — seen 3 times, affects `AGENTS.md`
 
 - aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
@@ -285,14 +294,6 @@ Read this before you start. These are not hypothetical.
 - The gate key and the metric field were named so they could never meet _(failure, pr:29)_
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
-
-**unverified-external-semantics** — seen 3 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
-
-- The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
-- Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
-- Prepending the image library to .libPaths() shadowed the runner's base R and broke the scanner _(failure, pr:29)_
-
-  Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
 
 **untested-rare-path** — seen 2 times, affects `AGENTS.md`
 

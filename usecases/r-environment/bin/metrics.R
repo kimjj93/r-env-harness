@@ -40,7 +40,11 @@ num <- function(x, d = NA) {
 # never meet.
 risk_max <- NA_real_
 if (!is.null(risk) && length(risk)) {
-  vals <- suppressWarnings(as.numeric(vapply(risk, function(r) {
+  # Only packages the repository actually chose feed the gate. Packages that
+  # ship with R are scored and reported, but gating on them would block every
+  # candidate on properties of R itself.
+  gated <- Filter(function(r) is.null(r$in_gate) || isTRUE(r$in_gate), risk)
+  vals <- suppressWarnings(as.numeric(vapply(gated, function(r) {
     if (is.null(r$score)) NA_real_ else as.numeric(r$score)
   }, numeric(1))))
   vals <- vals[is.finite(vals)]

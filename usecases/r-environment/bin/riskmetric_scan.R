@@ -96,23 +96,31 @@ if (!requireNamespace("riskmetric", quietly = TRUE)) {
   quit(status = 0L, save = "no")
 }
 
-# Packages with `Priority: base` ship with R itself. Scoring them for community
-# trust signals -- bug tracker, source control, download counts -- measures the
-# absence of things base R has no reason to have, and would have reported R's
-# own components as the highest supply-chain risk in the environment. They are
-# not a package choice this repository makes, so they are listed and skipped.
-base_pkgs <- character(0)
-for (p in new_pkgs) {
+# Packages carrying `Priority: base` or `Priority: recommended` ship WITH R.
+# They are not a choice this repository makes, and they systematically look
+# risky to riskmetric because they have no GitHub bug tracker, no vignettes and
+# no public download counts. Measured on a full run, the nine highest-risk
+# packages in the whole environment were mgcv, boot, KernSmooth, spatial, MASS,
+# nlme, class, foreign and codetools -- every one of them shipped with R.
+#
+# They are still scored and still shown. What changes is that they do not feed
+# the gate metric, because the gate exists to govern packages that were chosen.
+# Hiding them would be an exemption; reporting them separately is a category.
+priority_of <- function(p) {
   d <- image_pkg_dir(p)
-  if (!nzchar(d)) next
+  if (!nzchar(d)) return(NA_character_)
   pri <- tryCatch(read.dcf(file.path(d, "DESCRIPTION"), fields = "Priority")[[1]],
                   error = function(e) NA_character_)
-  if (!is.na(pri) && identical(trimws(pri), "base")) base_pkgs <- c(base_pkgs, p)
+  if (is.na(pri)) NA_character_ else trimws(pri)
 }
-scan_pkgs <- setdiff(new_pkgs, base_pkgs)
+ships_with_r <- vapply(new_pkgs, function(p) {
+  pri <- priority_of(p)
+  !is.na(pri) && pri %in% c("base", "recommended")
+}, logical(1))
+base_pkgs <- new_pkgs[ships_with_r]
+scan_pkgs <- new_pkgs
 if (length(base_pkgs)) {
-  message("Skipping ", length(base_pkgs), " base-priority package(s): ",
-          paste(base_pkgs, collapse = ", "))
+  message("Ships with R (scored, excluded from gate): ", paste(base_pkgs, collapse = ", "))
 }
 
 rows <- list()
@@ -154,9 +162,11 @@ for (p in scan_pkgs) {
     }
     list(package = p, score = score,
          weak = if (length(weak)) paste(weak, collapse = ", ") else "",
+         in_gate = !(p %in% base_pkgs),
          note = if (src == "image") "" else "not in image library; scored from CRAN metadata only")
   }, error = function(e) {
     list(package = p, score = NA_real_, weak = "",
+         in_gate = !(p %in% base_pkgs),
          note = paste("assessment failed:", conditionMessage(e)))
   })
   rows[[length(rows) + 1L]] <- res
@@ -170,22 +180,30 @@ band <- function(s) {
   if (s >= 0.8) "**HIGH**" else if (s >= 0.5) "medium" else "low"
 }
 
+fmt_rows <- function(rs) vapply(rs, function(r) sprintf("| `%s` | %s | %s | %s | %s |",
+  r$package,
+  ifelse(is.na(r$score), "n/a", format(round(r$score, 3), nsmall = 3)),
+  band(r$score),
+  ifelse(nzchar(r$weak), r$weak, "-"),
+  ifelse(nzchar(r$note), r$note, "-")), character(1))
+
+hdr <- c("| package | risk score | risk | weakest dimensions | note |", "|---|---|---|---|---|")
+chosen  <- Filter(function(r) isTRUE(r$in_gate),  rows)
+shipped <- Filter(function(r) !isTRUE(r$in_gate), rows)
+
 md <- c("### Package risk (newly added)", "",
-        "| package | risk score | risk | weakest dimensions | note |",
-        "|---|---|---|---|---|",
-        vapply(rows, function(r) sprintf("| `%s` | %s | %s | %s | %s |",
-          r$package,
-          ifelse(is.na(r$score), "n/a", format(round(r$score, 3), nsmall = 3)),
-          band(r$score),
-          ifelse(nzchar(r$weak), r$weak, "-"),
-          ifelse(nzchar(r$note), r$note, "-")), character(1)),
-        "",
-        "",
-        if (length(base_pkgs))
-          sprintf("> Skipped %d base-priority package(s) that ship with R itself: %s",
-                  length(base_pkgs), paste(sprintf("`%s`", base_pkgs), collapse = ", "))
-        else "",
-        "",
+        "#### Chosen packages (these feed the gate)", "")
+md <- c(md, if (length(chosen)) c(hdr, fmt_rows(chosen)) else "_None._")
+if (length(shipped)) {
+  md <- c(md, "",
+          "#### Ships with R (scored, excluded from the gate)", "",
+          "> These carry `Priority: base` or `Priority: recommended`, so they arrive",
+          "> with R rather than being chosen. They score poorly because they have no",
+          "> public bug tracker, vignettes or download counts, not because they are",
+          "> risky. Shown rather than hidden, so the exclusion is visible.", "",
+          hdr, fmt_rows(shipped))
+}
+md <- c(md, "",
         "> **Higher score = higher risk.** `summarize_scores()` returns a risk score,",
         "> so 0.42 is better than 0.69. Verified against known packages.",
         "",
