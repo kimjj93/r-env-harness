@@ -72,6 +72,7 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Sign the image (keyless)
+        id: sign
         run: |
           set -euo pipefail
           # Keyless OIDC signing: provenance without key management.
@@ -86,13 +87,6 @@ jobs:
           artifact-name: sbom-renv.spdx.json
           output-file: sbom-renv.spdx.json
 
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.IMAGE_BASE }}/renv
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
       - name: Extract and archive the environment manifest
         run: |
           set -euo pipefail
@@ -106,8 +100,19 @@ jobs:
           cp "evidence/manifests/renv-${{ github.sha }}.json" \
              "evidence/manifests/renv-latest.json"
 
+      # Deliberately NOT continue-on-error. This is qualification evidence for
+      # the exact bits that were published; if it fails, the publish is not
+      # successful in any sense worth reporting. It was marked
+      # continue-on-error, which meant a published image could fail its own
+      # qualification and the run would still be green.
+      #
+      # The image is already in the registry by this point, which sounds worse
+      # than it is: the ledger append comes AFTER this step, so an image that
+      # fails its own PQ never becomes `current` in images.lock.json and is
+      # never blessed as the accepted environment. The tag exists; the evidence
+      # that would let anyone rely on it does not. That ordering is load-
+      # bearing -- do not move the ledger append above this step.
       - name: Run PQ inside the published image and archive results
-        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p artifacts evidence/metrics
@@ -118,6 +123,87 @@ jobs:
             Rscript /project/usecases/r-environment/validation/run-validation.R
           cp artifacts/pq-summary.json evidence/metrics/pq-renv-latest.json
 
+      # Two steps above are named "archive" and, until now, archived nothing
+      # that outlived the runner. The only durable copy was made by the ledger
+      # append at the end, which is skipped whenever anything before it fails --
+      # so the evidence was discarded in precisely the case where somebody needs
+      # to read it. `if: always()` because a failed PQ is not a reason to throw
+      # away the PQ output; it is the reason to keep it.
+      - name: Upload publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-evidence-${{ github.sha }}
+          path: |
+            evidence/manifests/
+            evidence/metrics/
+            artifacts/
+            sbom-renv.spdx.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Attestation now runs AFTER the manifest and the PQ, and that ordering is
+      # the actual fix.
+      #
+      # It used to run before them. It failed -- build provenance attestation is
+      # not available for user-owned private repositories -- and the three steps
+      # behind it were skipped: the manifest extract, the PQ run, and the ledger
+      # append. The image had already been built, pushed and signed by then, so
+      # the registry was left holding a signed image that nothing had qualified.
+      # The one artefact anybody would actually pull was the only one never
+      # validated. A partial failure left a worse state than a total failure.
+      #
+      # Guarding the step would have fixed that instance. Moving it fixes the
+      # class: mandatory evidence no longer sits behind optional infrastructure,
+      # so no future problem with attestation can cost us the qualification
+      # record again. Only the ledger append follows, because only the ledger
+      # needs to know whether attestation actually happened.
+      - name: Check attestation capability
+        id: attestcap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          # Deliberately no `-e`. This step only decides whether to attempt an
+          # optional step; a probe must never have the power to fail the publish
+          # it is probing for. That was the original bug in a smaller form.
+          set -uo pipefail
+
+          VIS="${EVENT_VISIBILITY:-}"
+          if [ -z "$VIS" ]; then
+            VIS=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility 2>/dev/null || true)
+          fi
+          VIS="${VIS:-unknown}"
+          echo "visibility=$VIS" >> "$GITHUB_OUTPUT"
+
+          case "$VIS" in
+            public)
+              # Attestation is expected to work. If it fails from here it is a
+              # real failure and should fail the run -- the evidence is already
+              # archived by this point, so failing costs nothing but the ledger
+              # entry, and an image without provenance should not be blessed as
+              # `current` anyway.
+              echo "supported=true" >> "$GITHUB_OUTPUT"
+              ;;
+            unknown)
+              echo "supported=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Could not determine repository visibility, so build provenance attestation was skipped rather than risked. The image is cosign-signed; the ledger will record provenance_attested=false."
+              ;;
+            *)
+              echo "supported=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Build provenance attestation is not available for ${VIS} user-owned repositories. The image is cosign-signed, but no provenance attestation will exist for this digest. Make the repository public to enable it."
+              ;;
+          esac
+
+      - name: Attest build provenance
+        id: attest
+        if: steps.attestcap.outputs.supported == 'true'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/renv
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
       - name: Append to the image evidence ledger
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
@@ -125,6 +211,9 @@ jobs:
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
           BASE_DIGEST: sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c
           LEDGER_BRANCH: evidence/images
+          SIGNED: ${{ steps.sign.outcome == 'success' && 'true' || 'false' }}
+          ATTESTED: ${{ steps.attest.outcome == 'success' && 'true' || 'false' }}
+          VISIBILITY: ${{ steps.attestcap.outputs.visibility }}
         run: |
           set -euo pipefail
           # The digest lock is the bridge between "the code we reviewed" and
@@ -175,7 +264,16 @@ jobs:
                   "digest": os.environ["DIGEST"],
                   "ppm_snapshot": os.environ["SNAPSHOT"],
                   "base_digest": os.environ["BASE_DIGEST"],
-                  "signed": True,
+                  # Recorded as observed, not asserted. "signed": True was
+                  # hardcoded, so the ledger would have claimed a signature
+                  # whether or not one existed.
+                  "signed": os.environ.get("SIGNED") == "true",
+                  "provenance_attested": os.environ.get("ATTESTED") == "true",
+                  "attestation_note": (
+                      "" if os.environ.get("ATTESTED") == "true"
+                      else "provenance attestation unavailable: repository visibility is "
+                           + os.environ.get("VISIBILITY", "unknown")
+                  ),
               }
           }
           data["current"] = sha
@@ -209,6 +307,11 @@ jobs:
             echo "| commit | \`${{ github.sha }}\` |"
             echo "| PPM snapshot | ${{ steps.pin.outputs.snapshot }} |"
             echo "| signed | cosign keyless |"
+            if [ "${{ steps.attest.outcome }}" = "success" ]; then
+              echo "| provenance | attested |"
+            else
+              echo "| provenance | **not attested** (visibility: ${{ steps.attestcap.outputs.visibility }}) |"
+            fi
             echo ""
             echo "Pull by digest (immutable):"
             echo '```'
