@@ -8,7 +8,7 @@
 #' admiral, dplyr, lubridate.
 
 testcase_generate_adsl_summary <- function() {
-  sys.source(harness_path("analysis/adsl.R"), envir = globalenv())
+  sys.source(usecase_path("analysis/adsl.R"), envir = globalenv())
   adsl <- build_adsl()
 
   list(
@@ -27,7 +27,7 @@ testcase_generate_adsl_summary <- function() {
 
 #' Deterministic checksum of the full ADSL, for Layer 4 of the delta report.
 testcase_adsl_checksum <- function() {
-  sys.source(harness_path("analysis/adsl.R"), envir = globalenv())
+  sys.source(usecase_path("analysis/adsl.R"), envir = globalenv())
   adsl <- build_adsl()
   adsl <- adsl[order(adsl$STUDYID, adsl$USUBJID), ]
   digest::digest(adsl, algo = "sha256")

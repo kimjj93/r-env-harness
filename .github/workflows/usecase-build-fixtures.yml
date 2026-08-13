@@ -39,7 +39,7 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          SNAP=$(grep '^PPM_SNAPSHOT=' env/renv/ppm-snapshot.txt | cut -d= -f2)
+          SNAP=$(grep '^PPM_SNAPSHOT=' usecases/r-environment/env/renv/ppm-snapshot.txt | cut -d= -f2)
           echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
@@ -48,7 +48,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: env/renv/Dockerfile
+          file: usecases/r-environment/env/renv/Dockerfile
           build-args: |
             PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }}
           tags: r-env-harness/renv:fixtures
@@ -64,7 +64,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/artifacts:/project/artifacts" \
             r-env-harness/renv:fixtures \
-            Rscript /project/harness/image_manifest.R /project/artifacts/fixture-env-manifest.json
+            Rscript /project/usecases/r-environment/bin/image_manifest.R /project/artifacts/fixture-env-manifest.json
           RVER=$(docker run --rm r-env-harness/renv:fixtures \
             Rscript -e 'cat(as.character(getRversion()))')
           ARCH=$(docker run --rm r-env-harness/renv:fixtures \
@@ -84,7 +84,7 @@ jobs:
             Rscript /project/validation/build-fixtures.R
           # The container writes as root; hand the files back to the runner user
           # so the checkout action can commit them.
-          sudo chown -R "$(id -u):$(id -g)" validation/fixtures
+          sudo chown -R "$(id -u):$(id -g)" usecases/r-environment/validation/fixtures
 
       - name: Verify the new baselines validate strictly
         run: |
@@ -121,7 +121,7 @@ jobs:
           REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- validation/fixtures; then
+          if git diff --quiet -- usecases/r-environment/validation/fixtures; then
             echo "::notice::Fixtures are byte-identical to the committed ones. Nothing to propose."
             exit 0
           fi
@@ -129,7 +129,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add validation/fixtures
+          git add usecases/r-environment/validation/fixtures
           git commit \
             -m "evidence(fixtures): regenerate reference baselines in CI" \
             -m "Built inside r-env-harness/renv at ${GITHUB_SHA} on ${{ steps.prov.outputs.arch }}." \

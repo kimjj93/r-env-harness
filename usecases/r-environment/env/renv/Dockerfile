@@ -105,7 +105,7 @@ RUN echo "options(repos = c(CRAN = '${PPM_URL}'))" \
       >> "${R_HOME}/etc/Rprofile.site"
 
 # System dependencies required by the pharmaverse stack.
-COPY env/renv/sysreqs.txt /tmp/sysreqs.txt
+COPY usecases/r-environment/env/renv/sysreqs.txt /tmp/sysreqs.txt
 RUN apt-get update && \
     xargs -a /tmp/sysreqs.txt apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/sysreqs.txt
@@ -120,13 +120,14 @@ WORKDIR /project
 
 # Copy ONLY the lockfile before restoring, so that editing an analysis script
 # does not invalidate the (expensive) package layer.
-COPY env/renv/renv.lock /project/renv.lock
+COPY usecases/r-environment/env/renv/renv.lock /project/renv.lock
 RUN R -q -e "renv::restore(lockfile = '/project/renv.lock', clean = TRUE, prompt = FALSE)"
 
 # Project source comes after the package layer.
-COPY analysis/    /project/analysis/
-COPY validation/  /project/validation/
-COPY harness/     /project/harness/
+COPY usecases/r-environment/analysis/    /project/usecases/r-environment/analysis/
+COPY usecases/r-environment/validation/  /project/usecases/r-environment/validation/
+COPY usecases/r-environment/bin/       /project/usecases/r-environment/bin/
+COPY harness/         /project/harness/
 
 # Record what was actually installed, baked into the image itself.
 RUN R -q -f /project/harness/image_manifest.R --args /project/manifest.json || true

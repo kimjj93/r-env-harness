@@ -1,0 +1,88 @@
+name: usecase-lint
+
+# Domain checks for the R environment use case.
+#
+# These live here, not in skills-lint, because they are opinions about R
+# containers. skills-lint governs every use case and must stay ignorant of all
+# of them; this file is free to know exactly what it is looking at.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Use case lint (R environment)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generated files still say they are generated
+        run: |
+          set -euo pipefail
+          fail=0
+          # The banner is what tells an agent not to hand-edit the file
+          # (AGENTS.md 1.4). Losing the banner disarms the rule silently, which
+          # is worse than losing the file.
+          for f in usecases/r-environment/env/nix/default.nix \
+                   usecases/r-environment/env/nix/.Rprofile; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing"; fail=1; continue
+            fi
+            grep -qi 'GENERATED' "$f" || {
+              echo "::error file=$f::lost its generated-file banner"; fail=1; }
+          done
+          exit $fail
+
+      - name: No floating version pins
+        run: |
+          set -euo pipefail
+          fail=0
+          # A floating tag silently changes the environment underneath you,
+          # which defeats the entire purpose of this use case. An environment
+          # that can change without a commit cannot be submitted as evidence.
+          if grep -rnE '^FROM [^ ]+:latest' usecases/r-environment/env/ 2>/dev/null; then
+            echo "::error::floating ':latest' base image found"; fail=1
+          fi
+          for df in usecases/r-environment/env/renv/Dockerfile \
+                    usecases/r-environment/env/nix/Dockerfile.nix; do
+            [ -f "$df" ] || continue
+            while read -r line; do
+              case "$line" in
+                *"@sha256:"*) ;;
+                *) echo "::error file=$df::base image not pinned by digest: $line"; fail=1 ;;
+              esac
+            done < <(grep '^FROM ' "$df")
+          done
+          exit $fail
+
+      - name: Capability adapters are executable
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          fail=0
+          for cap in build qualify delta candidates; do
+            cmd=$(./harness/usecase cmd "$cap")
+            [ -x "$cmd" ] || { echo "::error::$cmd is not executable"; fail=1; }
+            bash -n "$cmd" || { echo "::error::$cmd does not parse"; fail=1; }
+          done
+          exit $fail
+
+      - name: R scripts parse
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq r-base-core >/dev/null
+          fail=0
+          # Currently covers harness/**.R as well as this use case's own R.
+          # That is a known wrinkle: the harness's own tooling is written in R,
+          # so a non-R adopter inherits an R dependency they do not want. See
+          # the portability limitation in README.md.
+          while read -r f; do
+            Rscript -e "tryCatch({parse('$f'); cat('ok  $f\n')}, error=function(e){cat('FAIL $f:', conditionMessage(e), '\n'); quit(status=1)})" || fail=1
+          done < <(find harness usecases/r-environment -name '*.R')
+          exit $fail

@@ -50,7 +50,7 @@ ranking:
 
 # A candidate must clear ALL of these to be proposable.
 gates:
-  pq_failed_max: 0
+  checks_failed_max: 0
   forbidden_verdicts:
     - FAIL_DEVIATION
     - FAIL_NONDETERMINISM

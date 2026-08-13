@@ -291,3 +291,73 @@ This is a **methodology demonstration**, not a validated system. Using it for an
 actual regulatory submission requires your own IQ/OQ documentation, your own QA
 sign-off, and your own SOPs. The harness produces evidence; it does not produce
 compliance.
+
+---
+
+## 10. Taking the harness to a different problem
+
+The R environment work is the **example**, not the product. Everything at the
+repository root is domain-independent and is meant to be lifted out.
+
+### Extract
+
+```bash
+./tools/extract-template.sh ../my-harness
+cd ../my-harness
+```
+
+The script copies the harness, drops the use case, writes a stub that satisfies
+the contract, and then **verifies its own output** — the manifest must be
+coherent, the boundary check must pass, and no trace of the old domain may
+survive. If any of that fails the extraction aborts rather than handing you a
+broken template.
+
+### Implement five commands
+
+| Verb | What it must do | Evidence it writes |
+|---|---|---|
+| `build` | materialise a candidate state | `evidence/build/<variant>-build.json` |
+| `qualify` | prove that state correct | `evidence/qualify/<variant>-qualify.json` + JUnit |
+| `delta` | compare against a baseline | `evidence/delta/<variant>-verdict.json` + `.md` |
+| `candidates` | list what research may vary | JSON array on stdout |
+| `apply` | write a candidate into the repo | exit 0 applied, 3 already current |
+
+They can be written in any language. The harness invokes them as commands and
+reads only the documented schema in `docs/schema/evidence.md`.
+
+### The one field worth understanding
+
+`margin_utilisation` — the largest fraction of any declared margin that a check
+actually consumed.
+
+A suite passing at `0.98` is one bad day from failing. A suite passing at
+`0.001` has real headroom. **Both report "all checks passed"**, and only this
+field tells them apart. It is why the scoreboard ranks a slower agent above a
+faster one that scraped through.
+
+If your domain has no meaningful notion of margin, report `null` — not `0`.
+Zero claims perfect headroom it has not earned.
+
+### Worked examples of the mapping
+
+| Domain | `build` | `qualify` | `delta` | `margin_utilisation` |
+|---|---|---|---|---|
+| R environments (this repo) | build the container | run PQ inside it | four-layer image delta | observed deviation ÷ declared tolerance |
+| SAS → R migration | render both programs | compare outputs to the SAS reference | which datasets differ, and how | numeric difference ÷ allowed difference |
+| Statistical model pipeline | fit on pinned data | back-test against held-out results | parameter and prediction drift | drift ÷ acceptance band |
+| Data ingestion | build the transform | row/column contracts + referential checks | schema and row-count diff | rejected rows ÷ allowed reject rate |
+
+### Keep the boundary honest
+
+```bash
+./harness/check_boundary
+```
+
+Run it before every push. It fails if a harness file names a use case path or a
+domain tool. There is exactly one exemption — `harness.yml` and the extractor,
+whose job *is* to name the seam — and adding a second is how the separation
+dies.
+
+If the harness genuinely cannot express what you need, **add a capability verb
+in its own pull request** and argue for it. Do not reach into harness code from
+the use case; that lets the domain edit its own referee.

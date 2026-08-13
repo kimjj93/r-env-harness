@@ -8,7 +8,7 @@ test_that("ADSL summary statistics reproduce the reference", {
   fx   <- load_fixture("adsl_summary")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["adsl_summary_reference"]]
-  crit <- read_critical_packages(harness_path("validation/R/testcase_adsl.R"))
+  crit <- read_critical_packages(usecase_path("validation/R/testcase_adsl.R"))
 
   obs <- testcase_generate_adsl_summary()
 
@@ -52,7 +52,7 @@ test_that("ADAE summary statistics reproduce the reference", {
   fx   <- load_fixture("adae_summary")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["adae_summary_reference"]]
-  crit <- read_critical_packages(harness_path("validation/R/testcase_adae.R"))
+  crit <- read_critical_packages(usecase_path("validation/R/testcase_adae.R"))
 
   obs <- testcase_generate_adae_summary()
 
@@ -90,7 +90,7 @@ test_that("RNG streams are stable across the environment", {
   fx   <- load_fixture("rng_kinds")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["rng_kinds_reference"]]
-  crit <- read_critical_packages(harness_path("validation/R/testcase_numeric.R"))
+  crit <- read_critical_packages(usecase_path("validation/R/testcase_numeric.R"))
 
   obs <- testcase_generate_rng_kinds()
 
@@ -108,7 +108,7 @@ test_that("linear algebra results are stable across the environment", {
   fx   <- load_fixture("linalg")
   meta <- fx[[".validation_env_meta"]]
   ref  <- fx[["linalg_reference"]]
-  crit <- read_critical_packages(harness_path("validation/R/testcase_numeric.R"))
+  crit <- read_critical_packages(usecase_path("validation/R/testcase_numeric.R"))
 
   obs <- testcase_generate_linalg()
 

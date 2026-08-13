@@ -9,9 +9,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'env/**'
-      - 'analysis/**'
-      - 'validation/**'
+      - 'usecases/r-environment/env/**'
+      - 'usecases/r-environment/analysis/**'
+      - 'usecases/r-environment/validation/**'
       - 'harness/**'
       - '.github/workflows/publish-image.yml'
   workflow_dispatch:
@@ -40,8 +40,8 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          echo "snapshot=$(grep '^PPM_SNAPSHOT=' env/renv/ppm-snapshot.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          echo "nixdate=$(grep '^NIXPKGS_DATE=' env/nix/nixpkgs-pin.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "snapshot=$(grep '^PPM_SNAPSHOT=' usecases/r-environment/env/renv/ppm-snapshot.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "nixdate=$(grep '^NIXPKGS_DATE=' usecases/r-environment/env/nix/nixpkgs-pin.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -56,7 +56,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: env/renv/Dockerfile
+          file: usecases/r-environment/env/renv/Dockerfile
           build-args: |
             PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }}
           # Tagged by commit SHA, never 'latest', so an image maps 1:1 to a
@@ -102,7 +102,7 @@ jobs:
             -e PPM_SNAPSHOT=${{ steps.pin.outputs.snapshot }} \
             -v "${{ github.workspace }}/evidence/manifests:/out" \
             "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}" \
-            Rscript /project/harness/image_manifest.R /out/renv-${{ github.sha }}.json
+            Rscript /project/usecases/r-environment/bin/image_manifest.R /out/renv-${{ github.sha }}.json
           cp "evidence/manifests/renv-${{ github.sha }}.json" \
              "evidence/manifests/renv-latest.json"
 
