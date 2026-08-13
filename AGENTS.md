@@ -267,19 +267,20 @@ Mistakes this repository has made more than once. Recorded automatically from
 `evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
 Read this before you start. These are not hypothetical.
 
+**silent-gate-degradation** — seen 3 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
+
+- as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
+- ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
+- A declared research gate whose field is never measured was skipped, not failed _(failure, pr:29)_
+
+  Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
+
 **metric-field-mismatch** — seen 2 times, affects `AGENTS.md`
 
 - aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
 - scoreboard.R read delta$package_churn; the field is delta$layer3_packages$churn _(failure, pr:22)_
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
-
-**silent-gate-degradation** — seen 2 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
-
-- as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
-- ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
-
-  Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 
 **untested-rare-path** — seen 2 times, affects `AGENTS.md`
 
