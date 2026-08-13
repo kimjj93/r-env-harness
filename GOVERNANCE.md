@@ -41,7 +41,7 @@ Three independent layers, so no single misconfiguration removes the gate:
 - 1 approving review required
 - stale approvals dismissed when new commits are pushed
 - review from a CODEOWNER required
-- `env-validate` and `skills-lint` must pass
+- `env-validate` and `lint` must pass
 
 **Layer 2 — CODEOWNERS**
 `*  @kimjj93` — every path requires the owner's review.
@@ -54,7 +54,7 @@ requirement — so even a compromised or misbehaving agent cannot self-approve.
 
 ### Residual risk: the "create and approve pull requests" setting
 
-`build-fixtures`, `weekly-proposal` and `skills-drift` all need to *open* pull
+`build-fixtures`, `weekly` and `weekly` all need to *open* pull
 requests. GitHub controls that with a single repository setting —
 `can_approve_pull_request_reviews` — and, unhelpfully, the same switch governs
 both **creating** and **approving**. It cannot be split. It is enabled here,
@@ -69,7 +69,7 @@ That does not open the gate, for three reasons that must all remain true:
 2. **`require_last_push_approval: true`.** The approval must come from someone
    other than whoever pushed the last commit — so a workflow cannot push a
    change and then bless it.
-3. **`skills-lint` fails any workflow containing an approve call.** The
+3. **`lint` fails any workflow containing an approve call.** The
    capability exists at the platform level but is barred at the source level,
    and that check is itself a required status check.
 
@@ -209,7 +209,7 @@ Review burden is the scarcest resource in this system, so it is budgeted:
   none at all if nothing outperformed the incumbent.
 - Agent races auto-close losing entries, so only the winner reaches a human.
 - The learning log (`evidence/learnings.jsonl`) absorbs observations **without**
-  opening anything. `learning-promote.yml` converts one into a PR only after the
+  opening anything. `weekly.yml` converts one into a PR only after the
   same lesson has been recorded twice. This is the reason the threshold exists at
   all: promotion spends the scarce resource, so it has to be earned. A harness
   that proposed a rule for every observation would consume more review time than

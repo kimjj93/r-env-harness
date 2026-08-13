@@ -12,7 +12,7 @@ modes look like, and how to tell a real problem from noise.
 
 One PR. That is the design target, and in a normal week it is the whole job.
 
-Monday morning `weekly-proposal` opens at most one PR titled
+Monday morning `weekly` opens at most one PR titled
 `proposal: <candidate>`, labelled `environment-proposal` and `needs-human-review`.
 Read it in this order:
 
@@ -35,7 +35,7 @@ workflow opens nothing. Silence means "nothing was worth your attention", not
 "the loop is broken". Confirm with:
 
 ```bash
-gh run list --workflow weekly-proposal.yml --limit 1
+gh run list --workflow weekly.yml --limit 1
 ```
 
 A green run with no PR is the quiet-week path working correctly.
@@ -46,12 +46,12 @@ A green run with no PR is the quiet-week path working correctly.
 
 | When | What | Touches `main`? |
 |---|---|---|
-| Every PR | `env-validate` (both tracks), `skills-lint` | no — gates |
+| Every PR | `env-validate` (both tracks), `lint` | no — gates |
 | Agent PR opened | `ai-review` (advisory `COMMENT`) | no |
 | Nightly | `nightly-research` → `research/telemetry` | **no** |
 | Merge to `main` | `publish-image` → `evidence/images` | **no** |
-| Merge to `main` | `skills-drift` | opens a PR at most |
-| Monday | `weekly-proposal` | opens ≤1 PR |
+| Merge to `main` | `weekly` | opens a PR at most |
+| Monday | `weekly` | opens ≤1 PR |
 | On demand | `agent-race` | opens issues + agent PRs |
 
 Two of these deserve emphasis, because they are what keeps the review burden at
@@ -114,7 +114,7 @@ Write the task as a *constraint*, not a wish. `"Reduce image size"` invites an
 agent to delete a validation step. `"Reduce image size without changing any
 package version in renv.lock and without weakening any validation assertion"`
 does not. The agents are graded against the same gates as everyone else, so a
-racer that weakens a gate to win will fail `skills-lint`.
+racer that weakens a gate to win will fail `lint`.
 
 If a racer cannot be assigned, its issue is closed automatically — an unassigned
 racer issue is litter, because nothing will ever work on it.
@@ -150,11 +150,11 @@ You are the triggering actor, so it runs immediately.
 version-controlled for the same reason the code is: so a change to them shows up
 in a diff and gets reviewed.
 
-Change them exactly like code — branch, PR, review. `skills-lint` gates them, and
+Change them exactly like code — branch, PR, review. `lint` gates them, and
 `ai-review` flags any diff touching them as the highest-consequence change in the
 repository, because it is.
 
-`skills-drift` proposes such changes automatically after merges to `main`, when
+`weekly` proposes such changes automatically after merges to `main`, when
 recent accepted commits contradict what the docs claim. It opens a PR. It never
 commits.
 
@@ -285,7 +285,7 @@ not running is worse than a gate that is loudly broken.
 
 These are recorded permanently in `evidence/learnings.jsonl`, not just here. This
 section is prose a human wrote once; the log is a structured record that agents
-append to as they work and that `learning-promote.yml` reads. When the same
+append to as they work and that `weekly.yml` reads. When the same
 lesson lands there twice, it is proposed for `AGENTS.md` automatically.
 
 ---
@@ -315,7 +315,7 @@ pattern and the lesson stays an anecdote forever.
 You will not normally open a PR for this. Add the entry alongside the work that
 taught it to you, in the same pull request.
 
-**What you review, and how often.** `learning-promote.yml` opens a PR only when a
+**What you review, and how often.** `weekly.yml` opens a PR only when a
 lesson crosses the threshold, which should be rare. It adds evidence to
 `AGENTS.md`, never rule text — deciding whether a recurring mistake warrants a
 hard rule in §1 is your judgement, made while reviewing that PR. If you decide it

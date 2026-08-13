@@ -49,7 +49,7 @@ If you cannot name a downside, you have probably not compared it to anything.
 - [ ] I did not hand-edit a committed fixture
 - [ ] I did not weaken or bypass a gate
 - [ ] Every number above comes from a CI artifact, not an estimate
-- [ ] `env-validate` and `skills-lint` pass
+- [ ] `env-validate` and `lint` pass
 
 ---
 

@@ -1,0 +1,506 @@
+# Everything the harness does to itself on a schedule, in one predictable window.
+#
+# Monday morning, in order: check the docs against the tree, propose an
+# environment change if the research found one worth making, then promote any
+# lesson the log has now seen twice.
+#
+# The point is the RHYTHM, not the file. Drift used to run on every push, so
+# proposals arrived at random moments and there was never an hour when you could
+# say "nothing is waiting for me". Now there is: everything that can open a pull
+# request at you lands in one window, and the rest of the week is quiet.
+#
+# Nightly research still runs nightly -- it is pure background compute, writes
+# only to the telemetry branch and opens nothing. You are not meant to see it.
+#
+# Each job stays independent on purpose. A drift report and an environment
+# proposal are different decisions and must be acceptable or refusable
+# separately; batching them into one pull request would be a worse review, not a
+# simpler one.
+name: weekly
+
+on:
+  schedule:
+    # 06:00 UTC Monday. Jobs run in sequence via `needs`, so they cannot contend
+    # for the same branch push.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Occurrences required before a lesson enters AGENTS.md"
+        required: false
+        default: "2"
+
+# Permissions are declared per job, not once at the top. Merging these three
+# workflows meant merging three different permission sets, and the widest would
+# have silently become the default for all of them. Each job now states exactly
+# what it needs.
+permissions:
+  contents: read
+
+jobs:
+
+  detect:
+    permissions:
+      contents: write        # commits the drift report to its own branch
+      pull-requests: write   # opens the report as a PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Look for contradictions between the docs and the repository
+        id: drift
+        run: |
+          set -euo pipefail
+          : > /tmp/drift.md
+          drift=0
+          note () { echo "- $1" >> /tmp/drift.md; drift=1; }
+
+          # Every referenced path must exist. A SKILL.md that points at a file
+          # someone renamed sends the next agent hunting, and agents that cannot
+          # find a referenced file tend to invent a plausible substitute.
+          # A layer root is a directory carrying its own AGENTS.md: the repo root
+          # for the harness, and each use case root. Documents inside a layer
+          # write paths relative to that layer, which is what keeps a use case
+          # relocatable -- spelling out `usecases/r-environment/` in every skill
+          # would mean renaming the directory breaks every document in it. The
+          # convention is stated in AGENTS.md 0.
+          layer_root () {
+            d=$(dirname "$1")
+            while [ "$d" != "." ] && [ "$d" != "/" ]; do
+              [ -f "$d/AGENTS.md" ] && { echo "$d"; return; }
+              d=$(dirname "$d")
+            done
+            echo ""
+          }
+
+          while read -r f; do
+            dir=$(dirname "$f")
+            layer=$(layer_root "$f")
+            # `|| true` matters: under `set -o pipefail`, grep finding nothing
+            # returns 1 and would abort the whole scan. A doc that references no
+            # paths is normal, not an error.
+            # Documentation sometimes writes a path to ILLUSTRATE a convention
+            # rather than to point at a file. AGENTS.md 0 explains how paths are
+            # written by showing one, and the detector promptly reported that
+            # explanation as drift -- the rule flagging the sentence that
+            # defines it. Lines marked with an ignore comment are skipped.
+            #
+            # The marker is line-scoped on purpose. A file-scoped or
+            # directory-scoped exemption would let one commit silence a whole
+            # document, and an escape hatch nobody can see in a diff is how a
+            # gate quietly stops being a gate.
+            sed '/<!-- drift-ignore-next-line -->/,+1d' "$f" \
+              | grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' 2>/dev/null \
+              | tr -d '`' | sort -u | while read -r ref; do
+                case "$ref" in */*) ;; *) continue ;; esac
+                # A document may legitimately write a path relative to itself.
+                # Once the use case moved into its own directory, its own docs
+                # became RIGHT and this check became WRONG -- it resolved every
+                # reference against the repository root and reported twelve
+                # false positives, which is how a drift detector loses its
+                # authority. Accept any of three readings, and only complain
+                # when none of them lands on a real file.
+                case "$ref" in
+                  /*) [ -e ".${ref}" ] && continue ;;   # leading slash = repo root
+                esac
+                [ -e "$ref" ]        && continue        # relative to repo root
+                [ -e "$dir/$ref" ]   && continue        # relative to the doc
+                [ -n "$layer" ] && [ -e "$layer/$ref" ] && continue  # relative to its layer root
+                echo "MISSING|$f|$ref" >> /tmp/missing.txt
+              done || true
+          done < <(find . -name 'SKILL.md' -o -name 'AGENTS.md' -o -name 'GOVERNANCE.md' | grep -v '^./.git/')
+
+          if [ -s /tmp/missing.txt ]; then
+            while IFS='|' read -r _ src ref; do
+              note "\`$src\` references \`$ref\`, which does not exist. Either the path moved or the instruction is stale."
+            done < /tmp/missing.txt
+          fi
+
+          # Every skill directory should be discoverable from the root contract,
+          # otherwise it exists but no agent is told to read it.
+          # Harness skills must be indexed by the root contract. Use case skills
+          # must be indexed by the use case's own contract -- the root contract
+          # is not allowed to know they exist.
+          for d in skills/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            grep -q "$name" AGENTS.md || \
+              note "\`skills/$name/\` is not mentioned in \`AGENTS.md\`, so agents have no reason to read it."
+          done
+          for d in usecases/*/skills/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            uc_agents="$(dirname "$(dirname "$d")")/AGENTS.md"
+            [ -f "$uc_agents" ] || continue
+            grep -q "$name" "$uc_agents" || \
+              note "\`$d\` is not mentioned in \`$uc_agents\`, so agents have no reason to read it."
+          done
+
+          # Workflows referenced by the docs should exist, and vice versa.
+          for wf in .github/workflows/*.yml; do
+            base=$(basename "$wf")
+            # Use case docs count as documentation. Omitting them reported four
+            # workflows as undocumented when they were simply documented in the
+            # layer that owns them.
+            if ! grep -rqF "$base" AGENTS.md GOVERNANCE.md README.md docs/ skills/ \
+                   usecases/*/AGENTS.md usecases/*/skills/ 2>/dev/null; then
+              note "\`$base\` exists but is not documented in \`AGENTS.md\`, \`GOVERNANCE.md\`, \`README.md\` or any skill. Undocumented automation is automation nobody reviews."
+            fi
+          done
+
+          # Sort the findings. `find` does not promise an order, so an unsorted
+          # report re-orders itself between runs and two identical reports look
+          # like a change. That is not cosmetic: the loop guard below compares
+          # reports, and a comparison against unstable output never matches.
+          sort -o /tmp/drift.md /tmp/drift.md
+
+          # THE LOOP GUARD.
+          #
+          # This workflow triggers on push to main, and its own PR is merged to
+          # main. Reporting drift does not FIX drift, so the next push found the
+          # same findings and opened the same PR again -- and would have done so
+          # forever, one PR per merge, each one asking the human to review what
+          # they had just reviewed.
+          #
+          # The fix is to compare against the last report that was actually
+          # merged. Identical findings mean the human has already been told;
+          # telling them again is noise, and a detector that generates noise is
+          # a detector that gets ignored precisely when it is right.
+          #
+          # Findings that CHANGE still open a PR, so genuinely new drift is
+          # never suppressed.
+          prev=$(ls -1 evidence/drift/*-drift.md 2>/dev/null | sort | tail -1)
+          if [ -n "$prev" ] && [ "$drift" = "1" ]; then
+            # Compare only the bullets inside "## Findings". The header carries
+            # a commit SHA that differs on every run by construction, and a
+            # merged report may later gain a resolution section written by
+            # whoever triaged it. Matching every "- " line in the file would
+            # fold that commentary into the comparison, so a report and its own
+            # follow-up notes would stop looking equal and the loop would
+            # silently resume. Scope the extraction to the section that holds
+            # findings, and nothing else can perturb it.
+            extract () { awk '/^## Findings$/{f=1;next} /^## /{f=0} f && /^- /' "$1" | sort; }
+            if diff -q <(extract "$prev") /tmp/drift.md >/dev/null 2>&1; then
+              echo "::notice::Drift is unchanged since $prev. Already reported; not reporting again."
+              drift=0
+            fi
+          fi
+
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+          echo "--- findings ---"; cat /tmp/drift.md || true
+
+      - name: Open a documentation proposal
+        if: steps.drift.outputs.drift == '1'
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="docs/drift-$(date -u +%Y%m%d-%H%M%S)"
+
+          # If an unreviewed drift PR is already open, adding another would just
+          # multiply review load for the same class of problem.
+          if gh pr list --state open --label skills-drift --json number --jq 'length' | grep -qv '^0$'; then
+            echo "::notice::A skills-drift PR is already open; not opening another."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          mkdir -p evidence/drift
+          REPORT="evidence/drift/$(date -u +%Y-%m-%d)-drift.md"
+          {
+            echo "# Instruction drift detected"
+            echo
+            echo "Found in \`${{ github.sha }}\` (main as of this run)."
+            echo
+            echo "## Findings"
+            echo
+            cat /tmp/drift.md
+            echo
+            echo "## Why this matters"
+            echo
+            echo "These files are the contract every agent reads before acting."
+            echo "An instruction that no longer matches the repository does not"
+            echo "fail loudly -- it quietly misleads the next agent, and the"
+            echo "resulting mistake looks like an agent error rather than a"
+            echo "documentation error."
+            echo
+            echo "## What is being asked of you"
+            echo
+            echo "This PR reports drift; it does not guess at the wording. Decide"
+            echo "whether each finding means the docs should be corrected or the"
+            echo "repository should be. Both are legitimate outcomes."
+          } > "$REPORT"
+
+          git add "$REPORT"
+          git commit \
+            -m "docs: instruction drift detected in ${{ github.sha }}" \
+            -m "Automated detection of contradictions between AGENTS.md / skills and the current state of the repository. Reported, not auto-corrected: instruction changes alter the behaviour of every future agent and warrant human wording."
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "docs: instruction drift detected" \
+            --body-file "$REPORT" \
+            --label "skills-drift" \
+            --label "needs-human-review"
+
+      - name: No drift
+        if: steps.drift.outputs.drift != '1'
+        run: echo "::notice::Instructions are consistent with the repository."
+
+  propose:
+    # `needs` here is for ORDERING only, not dependency. These three jobs each
+    # push a branch and open a PR; running them concurrently makes them contend
+    # over the same remote. `if: always()` keeps the sequencing while ensuring a
+    # failure in the drift job cannot suppress the weekly proposal -- they are
+    # independent concerns and were independent workflows before this merge.
+    needs: detect
+    if: always()
+    permissions:
+      contents: write        # pushes the proposal branch
+      pull-requests: write   # opens the proposal
+      actions: read          # reads research telemetry from prior runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+          use-public-rspm: true
+
+      - name: Install aggregation dependencies
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+
+      - name: Collect the week's telemetry
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git fetch origin research/telemetry || true
+          if git rev-parse --verify origin/research/telemetry >/dev/null 2>&1; then
+            git show origin/research/telemetry:evidence/metrics/metrics.jsonl \
+              > artifacts/metrics.jsonl 2>/dev/null || : > artifacts/metrics.jsonl
+          else
+            echo "::notice::No telemetry branch yet -- the research loop has not reported."
+            : > artifacts/metrics.jsonl
+          fi
+          echo "rows: $(wc -l < artifacts/metrics.jsonl)"
+
+      - name: Aggregate and select a candidate
+        run: Rscript harness/research/aggregate.R artifacts/metrics.jsonl harness/research/candidates.yml artifacts
+
+      - name: Decide
+        id: decide
+        run: |
+          set -euo pipefail
+          REC=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json'))['recommendation'])")
+          echo "recommendation=$REC" >> "$GITHUB_OUTPUT"
+          echo "This week: $REC"
+
+      - name: Generate the proposal and apply the pin
+        id: propose
+        if: steps.decide.outputs.recommendation == 'PROPOSE'
+        run: |
+          set -euo pipefail
+          Rscript harness/research/propose.R artifacts/recommendation.json .
+          # propose.R refuses to emit a pin edit for a candidate that matches
+          # the incumbent, and says so here rather than opening an empty PR.
+          CHANGED=$(python3 -c "import json;print(str(json.load(open('.proposal-status.json'))['changed']).lower())")
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" != "true" ]; then
+            REASON=$(python3 -c "import json;print(json.load(open('.proposal-status.json')).get('reason','n/a'))")
+            echo "::notice::No pull request opened: $REASON"
+          fi
+
+      - name: Measure how well the instructions are working
+        id: agentmetrics
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # The environment telemetry above says nothing about whether an agent
+          # reading AGENTS.md could actually do the job. This does. It is
+          # advisory: continue-on-error, because a measurement of the agents
+          # must never be able to block a proposal about the environment.
+          gh pr list --state all --limit 100 \
+            --json number,author,headRefName,labels,title > artifacts/prs.json
+          gh run list --workflow env-validate.yml --limit 300 \
+            --json headBranch,conclusion,createdAt > artifacts/runs.json
+          Rscript harness/agent_metrics.R artifacts/prs.json artifacts/runs.json artifacts >/dev/null
+          cat artifacts/agent-metrics.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open exactly one pull request
+        if: steps.decide.outputs.recommendation == 'PROPOSE' && steps.propose.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          ID=$(cat .proposal-id)
+          BRANCH="proposal/$(date -u +%Y-%m-%d)-${ID}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          cp artifacts/weekly-summary.csv evidence/proposals/ 2>/dev/null || true
+          # Carried into the proposal body so the human sees the environment
+          # verdict and the agent-effectiveness figures in one read, rather
+          # than in a dashboard nobody opens.
+          PROPOSAL_MD="evidence/proposals/$(date -u +%Y-%m-%d)-${ID}.md"
+          if [ -f artifacts/agent-metrics.md ] && [ -f "$PROPOSAL_MD" ]; then
+            { echo; echo "---"; echo; cat artifacts/agent-metrics.md; } >> "$PROPOSAL_MD"
+          fi
+          if [ -f artifacts/agent-metrics.jsonl ]; then
+            mkdir -p evidence/metrics
+            cat artifacts/agent-metrics.jsonl >> evidence/metrics/agent-metrics.jsonl
+          fi
+          rm -f PROPOSAL.md .proposal-status .proposal-status.json .proposal-id
+
+          git add -A
+          # Belt and braces: even with the check above, never open a pull
+          # request whose diff touches nothing outside evidence/. A proposal
+          # that changes no environment pin is not a proposal.
+          if git diff --cached --quiet -- . ':(exclude)evidence/'; then
+            echo "::error::Proposal branch changes no environment pin. Refusing to open a review-consuming PR."
+            exit 1
+          fi
+          git commit \
+            -m "proposal($ID): weekly environment candidate" \
+            -m "Selected by harness/research/aggregate.R from the last 7 days of unattended research telemetry. Full justification, metrics and rejected alternatives are in evidence/proposals/." \
+            -m "Requires human review and approval before merge (GOVERNANCE.md)."
+
+          git push origin "$BRANCH"
+
+          BODY=$(cat "evidence/proposals/$(date -u +%Y-%m-%d)-${ID}.md")
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "Weekly environment proposal: $ID" \
+            --body "$BODY" \
+            --label "environment-proposal" \
+            --label "needs-human-review"
+
+      - name: Record a quiet week
+        if: steps.decide.outputs.recommendation != 'PROPOSE' || steps.propose.outputs.changed != 'true'
+        run: |
+          if [ -f .proposal-status.json ]; then
+            REASON=$(python3 -c "import json;print(json.load(open('.proposal-status.json')).get('reason','n/a'))")
+          else
+            REASON=$(python3 -c "import json;print(json.load(open('artifacts/recommendation.json')).get('reason','n/a'))")
+          fi
+          echo "::notice::No proposal opened this week. Reason: $REASON"
+          echo "### No environment proposal this week" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reason: \`$REASON\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The incumbent environment remains the best known configuration." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-aggregation-${{ github.run_id }}
+          path: artifacts/
+
+  promote:
+    needs: propose
+    if: always()
+    name: Promote recurring lessons
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      # Needed to create the `learning-promotion` label if it is absent.
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4.2"
+          use-public-rspm: true
+
+      - name: Install jsonlite
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+
+      - name: Validate before proposing anything
+        run: Rscript harness/learnings.R validate evidence/learnings.jsonl
+
+      - name: Regenerate the recurring-lessons block
+        id: promote
+        run: |
+          set -euo pipefail
+          THRESHOLD="${{ github.event.inputs.threshold || '2' }}"
+          mkdir -p artifacts
+          Rscript harness/promote_learnings.R \
+            evidence/learnings.jsonl AGENTS.md "$THRESHOLD" artifacts/promotion.md \
+            | tee /tmp/out.txt
+          grep -q '^changed=true$' /tmp/out.txt && echo "changed=true" >> "$GITHUB_OUTPUT" || echo "changed=false" >> "$GITHUB_OUTPUT"
+
+      # One open promotion PR at a time. A second would be asking the human to
+      # review the same generated block twice.
+      - name: Skip if a promotion PR is already open
+        id: dedupe
+        if: steps.promote.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OPEN=$(gh pr list --state open --label learning-promotion --json number --jq 'length')
+          echo "open=$OPEN" >> "$GITHUB_OUTPUT"
+          [ "$OPEN" != "0" ] && echo "::notice::A promotion pull request is already awaiting review." || true
+
+      - name: Open the promotion pull request
+        if: steps.promote.outputs.changed == 'true' && steps.dedupe.outputs.open == '0'
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_BOT_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="skills/learning-promotion-$(date -u +%Y-%m-%d)"
+
+          # `gh pr create --label` fails outright if the label is absent, and
+          # this path may not run for months. Ensure it exists rather than
+          # discovering it is missing on the one day this matters.
+          gh label create learning-promotion \
+            --color 1D76DB \
+            --description "A lesson in evidence/learnings.jsonl has recurred and is proposed for AGENTS.md" \
+            2>/dev/null || true
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          git add AGENTS.md
+          git commit \
+            -m "docs(agents): promote recurring lessons into the contract" \
+            -m "Regenerated from evidence/learnings.jsonl. Only lessons recorded more than once are surfaced; single observations remain in the log. Evidence, not policy: the rule text, if any is warranted, is a human edit made while reviewing this pull request."
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "docs(agents): a lesson has recurred" \
+            --body-file artifacts/promotion.md \
+            --label "learning-promotion" \
+            --label "needs-human-review"
+
+      - name: Nothing to promote
+        if: steps.promote.outputs.changed != 'true'
+        run: |
+          echo "::notice::No lesson has newly recurred. The contract already reflects the log."
+          Rscript harness/learnings.R summary evidence/learnings.jsonl >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: learning-promotion
+          path: artifacts/
+          if-no-files-found: ignore
