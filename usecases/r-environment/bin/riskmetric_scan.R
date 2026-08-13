@@ -12,6 +12,8 @@
 
 suppressPackageStartupMessages(library(jsonlite))
 
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
+
 args <- commandArgs(trailingOnly = TRUE)
 delta_f <- if (length(args) >= 1) args[[1]] else "artifacts/delta.json"
 outdir  <- if (length(args) >= 2) args[[2]] else "artifacts"
@@ -125,6 +127,24 @@ md <- c("### Package risk (newly added)", "",
         "> correctness. Correctness is established by Performance Qualification.")
 
 emit(rows, md)
+
+# A green check that meant nothing is what let this capability sit broken for
+# the life of the project: the step carried continue-on-error, so "passed" only
+# ever meant "did not crash" while every package reported a failed assessment.
+#
+# Partial failures stay non-fatal -- one unreachable package is data, and the
+# table reports it. Every single package failing is not data, it is the scanner
+# being broken, and it is reported as a failure.
+failed_all <- length(rows) > 0 &&
+  all(vapply(rows, function(r) is.na(r$score %||% NA), logical(1)))
+if (failed_all) {
+  message("ERROR: riskmetric is installed but produced no score for any of the ",
+          length(rows), " package(s) scanned. This is a scanner failure, not a ",
+          "finding about these packages.")
+  quit(status = 1L, save = "no")
+}
+
+quit(status = 0L, save = "no")
 
 # Advisory only. A low score prompts scrutiny; it does not auto-block, because
 # the decision to accept a package's risk belongs to the human reviewer.

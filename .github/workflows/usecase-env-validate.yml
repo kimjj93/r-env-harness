@@ -180,8 +180,11 @@ jobs:
             any::jsonlite
           cache-version: riskmetric-1
 
+      # Deliberately NOT continue-on-error. It was, and that is precisely why
+      # this step reported success for the life of the project while producing
+      # no score for any package. The scan exits non-zero only when it scores
+      # nothing at all, which is a broken scanner rather than a risky package.
       - name: Package risk scan
-        continue-on-error: true
         run: |
           Rscript usecases/r-environment/bin/riskmetric_scan.R \
             artifacts/delta.json artifacts
