@@ -51,7 +51,7 @@ jobs:
           use-public-rspm: true
 
       - name: Install jsonlite
-        run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
       - name: Validate the learning log
         run: Rscript harness/learnings.R validate evidence/learnings.jsonl
@@ -92,7 +92,7 @@ jobs:
           use-public-rspm: true
 
       - name: Install jsonlite
-        run: Rscript -e 'install.packages("jsonlite", repos="https://packagemanager.posit.co/cran/latest")'
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
       - name: Validate before proposing anything
         run: Rscript harness/learnings.R validate evidence/learnings.jsonl
