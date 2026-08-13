@@ -86,7 +86,7 @@ No newly added packages.   ← say this explicitly when true
 ## Forward compatibility
 
 The R Validation Hub is moving development toward `{val.meter}` as riskmetric's
-successor. Keep the scan behind `harness/riskmetric_scan.R` so the backend can be
+successor. Keep the scan behind `bin/riskmetric_scan.R` so the backend can be
 swapped without touching workflows.
 
 ## References

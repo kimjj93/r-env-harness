@@ -79,7 +79,7 @@ something is unpinned (an RNG seed, a timestamp, an ordering dependency).
 
 ## Output contract
 
-`harness/image_delta.R` writes `delta.json`:
+`bin/image_delta.R` writes `delta.json`:
 
 ```json
 {

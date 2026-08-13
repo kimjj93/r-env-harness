@@ -44,14 +44,44 @@ jobs:
           # Every referenced path must exist. A SKILL.md that points at a file
           # someone renamed sends the next agent hunting, and agents that cannot
           # find a referenced file tend to invent a plausible substitute.
+          # A layer root is a directory carrying its own AGENTS.md: the repo root
+          # for the harness, and each use case root. Documents inside a layer
+          # write paths relative to that layer, which is what keeps a use case
+          # relocatable -- spelling out `usecases/r-environment/` in every skill
+          # would mean renaming the directory breaks every document in it. The
+          # convention is stated in AGENTS.md 0.
+          layer_root () {
+            d=$(dirname "$1")
+            while [ "$d" != "." ] && [ "$d" != "/" ]; do
+              [ -f "$d/AGENTS.md" ] && { echo "$d"; return; }
+              d=$(dirname "$d")
+            done
+            echo ""
+          }
+
           while read -r f; do
+            dir=$(dirname "$f")
+            layer=$(layer_root "$f")
             # `|| true` matters: under `set -o pipefail`, grep finding nothing
             # returns 1 and would abort the whole scan. A doc that references no
             # paths is normal, not an error.
             grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' "$f" 2>/dev/null \
               | tr -d '`' | sort -u | while read -r ref; do
                 case "$ref" in */*) ;; *) continue ;; esac
-                [ -e "$ref" ] || echo "MISSING|$f|$ref" >> /tmp/missing.txt
+                # A document may legitimately write a path relative to itself.
+                # Once the use case moved into its own directory, its own docs
+                # became RIGHT and this check became WRONG -- it resolved every
+                # reference against the repository root and reported twelve
+                # false positives, which is how a drift detector loses its
+                # authority. Accept any of three readings, and only complain
+                # when none of them lands on a real file.
+                case "$ref" in
+                  /*) [ -e ".${ref}" ] && continue ;;   # leading slash = repo root
+                esac
+                [ -e "$ref" ]        && continue        # relative to repo root
+                [ -e "$dir/$ref" ]   && continue        # relative to the doc
+                [ -n "$layer" ] && [ -e "$layer/$ref" ] && continue  # relative to its layer root
+                echo "MISSING|$f|$ref" >> /tmp/missing.txt
               done || true
           done < <(find . -name 'SKILL.md' -o -name 'AGENTS.md' -o -name 'GOVERNANCE.md' | grep -v '^./.git/')
 
@@ -63,19 +93,66 @@ jobs:
 
           # Every skill directory should be discoverable from the root contract,
           # otherwise it exists but no agent is told to read it.
+          # Harness skills must be indexed by the root contract. Use case skills
+          # must be indexed by the use case's own contract -- the root contract
+          # is not allowed to know they exist.
           for d in skills/*/; do
+            [ -d "$d" ] || continue
             name=$(basename "$d")
             grep -q "$name" AGENTS.md || \
               note "\`skills/$name/\` is not mentioned in \`AGENTS.md\`, so agents have no reason to read it."
+          done
+          for d in usecases/*/skills/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            uc_agents="$(dirname "$(dirname "$d")")/AGENTS.md"
+            [ -f "$uc_agents" ] || continue
+            grep -q "$name" "$uc_agents" || \
+              note "\`$d\` is not mentioned in \`$uc_agents\`, so agents have no reason to read it."
           done
 
           # Workflows referenced by the docs should exist, and vice versa.
           for wf in .github/workflows/*.yml; do
             base=$(basename "$wf")
-            if ! grep -rqF "$base" AGENTS.md GOVERNANCE.md README.md skills/ 2>/dev/null; then
+            # Use case docs count as documentation. Omitting them reported four
+            # workflows as undocumented when they were simply documented in the
+            # layer that owns them.
+            if ! grep -rqF "$base" AGENTS.md GOVERNANCE.md README.md docs/ skills/ \
+                   usecases/*/AGENTS.md usecases/*/skills/ 2>/dev/null; then
               note "\`$base\` exists but is not documented in \`AGENTS.md\`, \`GOVERNANCE.md\`, \`README.md\` or any skill. Undocumented automation is automation nobody reviews."
             fi
           done
+
+          # Sort the findings. `find` does not promise an order, so an unsorted
+          # report re-orders itself between runs and two identical reports look
+          # like a change. That is not cosmetic: the loop guard below compares
+          # reports, and a comparison against unstable output never matches.
+          sort -o /tmp/drift.md /tmp/drift.md
+
+          # THE LOOP GUARD.
+          #
+          # This workflow triggers on push to main, and its own PR is merged to
+          # main. Reporting drift does not FIX drift, so the next push found the
+          # same findings and opened the same PR again -- and would have done so
+          # forever, one PR per merge, each one asking the human to review what
+          # they had just reviewed.
+          #
+          # The fix is to compare against the last report that was actually
+          # merged. Identical findings mean the human has already been told;
+          # telling them again is noise, and a detector that generates noise is
+          # a detector that gets ignored precisely when it is right.
+          #
+          # Findings that CHANGE still open a PR, so genuinely new drift is
+          # never suppressed.
+          prev=$(ls -1 evidence/drift/*-drift.md 2>/dev/null | sort | tail -1)
+          if [ -n "$prev" ] && [ "$drift" = "1" ]; then
+            # Compare only the finding lines; the header carries a commit SHA
+            # that differs on every run by construction.
+            if diff -q <(grep '^- ' "$prev" | sort) /tmp/drift.md >/dev/null 2>&1; then
+              echo "::notice::Drift is unchanged since $prev. Already reported; not reporting again."
+              drift=0
+            fi
+          fi
 
           echo "drift=$drift" >> "$GITHUB_OUTPUT"
           echo "--- findings ---"; cat /tmp/drift.md || true

@@ -24,6 +24,21 @@ the rules that only make sense in its domain.
 
 If it is not in git, it did not happen.
 
+### How paths are written in these documents
+
+A **layer root** is any directory carrying its own `AGENTS.md`: the repository
+root for the harness, and each use case root. Inside a layer, write paths
+relative to that layer — a skill under `usecases/<x>/skills/` refers to
+`env/renv/renv.lock`, not to the full path from the repository root.
+
+This is what keeps a use case relocatable. Spelling out `usecases/r-environment/`
+in every document would mean renaming that one directory silently invalidates
+every instruction inside it.
+
+Use a leading `/` when you specifically mean the repository root, as in
+`/harness.yml`. The drift detector understands all three readings and complains
+only when none of them lands on a real file.
+
 ---
 
 ## 1. Non-negotiable rules
@@ -247,7 +262,7 @@ Read this before you start. These are not hypothetical.
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
 
-**silent-gate-degradation** — seen 2 times, affects `skills/performance-qualification/SKILL.md`
+**silent-gate-degradation** — seen 2 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
 
 - as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
