@@ -267,7 +267,7 @@ Mistakes this repository has made more than once. Recorded automatically from
 `evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
 Read this before you start. These are not hypothetical.
 
-**silent-gate-degradation** — seen 7 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
+**silent-gate-degradation** — seen 8 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
 
 - as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
@@ -276,6 +276,7 @@ Read this before you start. These are not hypothetical.
 - continue-on-error made the risk scan report success while scoring nothing _(workflow, pr:29)_
 - The riskmetric-unavailable branch exited 0, so the check went green while scoring nothing _(failure, pr:29)_
 - continue-on-error on the PQ run meant a published image could fail its own qualification while the workflow reported success. _(failure, Review of usecase-publish-image.yml line 110)_
+- Two steps named archive uploaded nothing, so evidence was discarded exactly when a failure made it worth reading. _(failure, Review of usecase-publish-image.yml after making the repository public)_
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 

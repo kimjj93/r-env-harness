@@ -87,44 +87,6 @@ jobs:
           artifact-name: sbom-renv.spdx.json
           output-file: sbom-renv.spdx.json
 
-      # Build provenance attestation is unavailable on user-owned private
-      # repositories. It failed here, and because it failed the three steps
-      # after it were skipped: the manifest extract, the PQ run against the
-      # published image, and the evidence ledger append.
-      #
-      # The image had already been built, pushed and signed by then. So the
-      # publish left behind an image that is in the registry and in use, with
-      # no manifest, no qualification evidence and no ledger entry -- the one
-      # artefact anybody would actually pull was the only one never validated.
-      # A partial failure left a worse state than a total failure would have.
-      #
-      # Capability is now checked rather than assumed, and the gap is recorded
-      # as a fact in the ledger instead of taking the evidence trail down with
-      # it.
-      - name: Check attestation capability
-        id: attestcap
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          VIS=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)
-          echo "visibility=$VIS" >> "$GITHUB_OUTPUT"
-          if [ "$VIS" = "public" ]; then
-            echo "supported=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "supported=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Build provenance attestation is not available for user-owned private repositories. The image is signed with cosign, but no provenance attestation will exist for this digest. Make the repository public to enable it."
-          fi
-
-      - name: Attest build provenance
-        id: attest
-        if: steps.attestcap.outputs.supported == 'true'
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.IMAGE_BASE }}/renv
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
       - name: Extract and archive the environment manifest
         run: |
           set -euo pipefail
@@ -160,6 +122,87 @@ jobs:
             "${{ env.IMAGE_BASE }}/renv@${{ steps.push.outputs.digest }}" \
             Rscript /project/usecases/r-environment/validation/run-validation.R
           cp artifacts/pq-summary.json evidence/metrics/pq-renv-latest.json
+
+      # Two steps above are named "archive" and, until now, archived nothing
+      # that outlived the runner. The only durable copy was made by the ledger
+      # append at the end, which is skipped whenever anything before it fails --
+      # so the evidence was discarded in precisely the case where somebody needs
+      # to read it. `if: always()` because a failed PQ is not a reason to throw
+      # away the PQ output; it is the reason to keep it.
+      - name: Upload publish evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-evidence-${{ github.sha }}
+          path: |
+            evidence/manifests/
+            evidence/metrics/
+            artifacts/
+            sbom-renv.spdx.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Attestation now runs AFTER the manifest and the PQ, and that ordering is
+      # the actual fix.
+      #
+      # It used to run before them. It failed -- build provenance attestation is
+      # not available for user-owned private repositories -- and the three steps
+      # behind it were skipped: the manifest extract, the PQ run, and the ledger
+      # append. The image had already been built, pushed and signed by then, so
+      # the registry was left holding a signed image that nothing had qualified.
+      # The one artefact anybody would actually pull was the only one never
+      # validated. A partial failure left a worse state than a total failure.
+      #
+      # Guarding the step would have fixed that instance. Moving it fixes the
+      # class: mandatory evidence no longer sits behind optional infrastructure,
+      # so no future problem with attestation can cost us the qualification
+      # record again. Only the ledger append follows, because only the ledger
+      # needs to know whether attestation actually happened.
+      - name: Check attestation capability
+        id: attestcap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          # Deliberately no `-e`. This step only decides whether to attempt an
+          # optional step; a probe must never have the power to fail the publish
+          # it is probing for. That was the original bug in a smaller form.
+          set -uo pipefail
+
+          VIS="${EVENT_VISIBILITY:-}"
+          if [ -z "$VIS" ]; then
+            VIS=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility 2>/dev/null || true)
+          fi
+          VIS="${VIS:-unknown}"
+          echo "visibility=$VIS" >> "$GITHUB_OUTPUT"
+
+          case "$VIS" in
+            public)
+              # Attestation is expected to work. If it fails from here it is a
+              # real failure and should fail the run -- the evidence is already
+              # archived by this point, so failing costs nothing but the ledger
+              # entry, and an image without provenance should not be blessed as
+              # `current` anyway.
+              echo "supported=true" >> "$GITHUB_OUTPUT"
+              ;;
+            unknown)
+              echo "supported=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Could not determine repository visibility, so build provenance attestation was skipped rather than risked. The image is cosign-signed; the ledger will record provenance_attested=false."
+              ;;
+            *)
+              echo "supported=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Build provenance attestation is not available for ${VIS} user-owned repositories. The image is cosign-signed, but no provenance attestation will exist for this digest. Make the repository public to enable it."
+              ;;
+          esac
+
+      - name: Attest build provenance
+        id: attest
+        if: steps.attestcap.outputs.supported == 'true'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/renv
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
       - name: Append to the image evidence ledger
         env:
@@ -264,10 +307,10 @@ jobs:
             echo "| commit | \`${{ github.sha }}\` |"
             echo "| PPM snapshot | ${{ steps.pin.outputs.snapshot }} |"
             echo "| signed | cosign keyless |"
-            if [ "${{ steps.attestcap.outputs.supported }}" = "true" ]; then
+            if [ "${{ steps.attest.outcome }}" = "success" ]; then
               echo "| provenance | attested |"
             else
-              echo "| provenance | **not attested** (repo is ${{ steps.attestcap.outputs.visibility }}; feature needs a public repo) |"
+              echo "| provenance | **not attested** (visibility: ${{ steps.attestcap.outputs.visibility }}) |"
             fi
             echo ""
             echo "Pull by digest (immutable):"
