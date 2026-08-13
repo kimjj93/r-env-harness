@@ -109,3 +109,21 @@ If you need the harness to do something new, do not reach into harness code from
 here — that would let the domain edit its own referee. Propose a change to the
 capability contract in its own PR, and say why the existing verbs cannot express
 what you need.
+
+## Automation owned by this use case
+
+GitHub requires every workflow to live in `.github/workflows/`, so ownership is
+marked by the `usecase-` filename prefix rather than by directory. Everything
+below belongs to this use case and travels with it; the unprefixed workflows
+belong to the harness and stay behind when it is extracted.
+
+| Workflow | What it does | When it runs |
+|---|---|---|
+| `.github/workflows/usecase-env-validate.yml` | builds both variants, runs PQ **inside** the image, produces the four-layer delta, and enforces the gate | every PR, and pushes to `main` |
+| `.github/workflows/usecase-lint.yml` | domain rules: no floating pins, generated-file banners intact, in-image paths resolve, evidence generation unmasked | every PR |
+| `.github/workflows/usecase-build-fixtures.yml` | regenerates reference baselines inside the validated image | manual dispatch only |
+| `.github/workflows/usecase-publish-image.yml` | publishes the signed image to GHCR with an SBOM | pushes to `main`, after a human merge |
+
+`usecase-build-fixtures.yml` is deliberately manual. Regenerating a baseline
+redefines what "correct" means, so it must be an argued PR (§ above) and never a
+side effect of some other job.
