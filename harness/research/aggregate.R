@@ -84,14 +84,42 @@ forbidden       <- c("FAIL_DEVIATION", "FAIL_NONDETERMINISM")
 # lines. The harness enforces thresholds without knowing what any field means,
 # which is what lets a different domain add its own gate without touching this.
 extra_gates <- list()
+declared_gate_keys <- character(0)
 if (file.exists(cand_file)) {
   y <- readLines(cand_file, warn = FALSE)
   m <- grep("^\\s*checks_failed_max:", y, value = TRUE)
   if (length(m)) gate_checks_max <- as.numeric(sub(".*:\\s*", "", m[1]))
-  for (line in grep("^\\s{4,}[a-z_]+_(min|max):", y, value = TRUE)) {
-    key <- trimws(sub(":.*", "", line))
-    val <- suppressWarnings(as.numeric(sub(".*:\\s*", "", line)))
-    if (!is.na(val) && !key %in% c("checks_failed_max")) extra_gates[[key]] <- val
+
+  # Read the `gates:` block by indentation rather than by a fixed indent width.
+  # This previously required four or more leading spaces while the manifest was
+  # written with two, so the block parsed to nothing and every declared
+  # threshold was silently absent -- the gates were not lenient, they were not
+  # there. Anchoring on the block and its relative indent means reindenting the
+  # file cannot quietly disarm it.
+  start <- grep("^(\\s*)gates:\\s*$", y)
+  if (length(start)) {
+    i <- start[1]
+    base_indent <- nchar(sub("gates:.*", "", y[i]))
+    j <- i + 1L
+    while (j <= length(y)) {
+      line <- y[j]
+      if (!nzchar(trimws(line))) { j <- j + 1L; next }
+      indent <- nchar(sub("^(\\s*).*", "\\1", line))
+      if (indent <= base_indent) break            # dedent ends the block
+      body <- trimws(line)
+      if (!startsWith(body, "#") && !startsWith(body, "-") &&
+          grepl("^[a-z_]+_(min|max):", body)) {
+        key <- sub(":.*", "", body)
+        val <- suppressWarnings(as.numeric(trimws(sub("^[^:]*:", "", body))))
+        if (!key %in% c("checks_failed_max")) {
+          declared_gate_keys <- c(declared_gate_keys, key)
+          # A threshold that is present but unreadable must not vanish. Record
+          # the key either way so the dead-gate report can still name it.
+          if (!is.na(val)) extra_gates[[key]] <- val
+        }
+      }
+      j <- j + 1L
+    }
   }
 }
 
@@ -191,6 +219,13 @@ summary_df <- summary_df[order(summary_df$candidate_id), , drop = FALSE]
 # to be active and in fact dead is worse than no gate: it buys confidence that
 # was never earned.
 dead_gates <- character(0)
+# A threshold whose value would not parse is reported too. The detector reads
+# the same list the evaluator does, so if a gate never makes it into that list
+# the detector is as blind as the evaluator -- which is exactly how the
+# indentation mismatch above went unnoticed.
+for (key in setdiff(declared_gate_keys, names(extra_gates))) {
+  dead_gates <- c(dead_gates, sprintf("%s (declared but its value did not parse as a number)", key))
+}
 for (key in names(extra_gates)) {
   field <- sub("_(min|max)$", "", key)
   observed <- vapply(by_id, function(r) {

@@ -67,13 +67,25 @@ for (p in new_pkgs) {
     # the source of the assessment is explicit rather than accidental.
     ref <- tryCatch(riskmetric::pkg_ref(p),
                     error = function(e) riskmetric::pkg_ref(p, source = "pkg_cran_remote"))
-    as <- riskmetric::pkg_assess(ref)
-    sc <- riskmetric::pkg_score(as)
-    score <- suppressWarnings(as.numeric(sc$pkg_score[[1]]))
+    sc  <- riskmetric::pkg_score(riskmetric::pkg_assess(ref))
 
+    # summarize_scores() is the documented way to collapse the assessment
+    # tibble. An earlier version read `sc$pkg_score`, a column riskmetric does
+    # not produce, so every package errored into "assessment failed".
+    score <- suppressWarnings(as.numeric(riskmetric::summarize_scores(sc)))
+    if (!length(score)) score <- NA_real_
+
+    # Per-metric scores run the OPPOSITE way to the summary: a metric is 1 when
+    # the good practice is present, while the summary is a RISK score where
+    # higher is worse. Measured, to make sure this is not a guess:
+    #   dplyr (vignettes+news+bug reports) -> 0.418
+    #   utils (no news, no bug reports)    -> 0.687
+    # So a low metric value is a weakness, and a high summary is risk.
     weak <- character(0)
-    for (m in c("has_tests", "covr_coverage", "has_vignettes", "has_news",
-                "has_bug_reports_url", "export_help", "downloads_1yr")) {
+    for (m in c("covr_coverage", "has_vignettes", "has_news",
+                "has_bug_reports_url", "export_help", "downloads_1yr",
+                "has_source_control", "has_maintainer")) {
+      if (is.null(sc[[m]])) next
       v <- tryCatch(suppressWarnings(as.numeric(sc[[m]][[1]])), error = function(e) NA_real_)
       if (!is.na(v) && v < 0.5) weak <- c(weak, m)
     }
@@ -87,13 +99,16 @@ for (p in new_pkgs) {
   rows[[length(rows) + 1L]] <- res
 }
 
+# Higher summarize_scores() means MORE risk, so the bands run the other way
+# round from the obvious reading. Getting this backwards would have flagged the
+# best-maintained packages as dangerous and waved the worst ones through.
 band <- function(s) {
   if (is.na(s)) return("unknown")
-  if (s >= 0.8) "low" else if (s >= 0.5) "medium" else "**HIGH**"
+  if (s >= 0.8) "**HIGH**" else if (s >= 0.5) "medium" else "low"
 }
 
 md <- c("### Package risk (newly added)", "",
-        "| package | score | risk | weakest dimensions | note |",
+        "| package | risk score | risk | weakest dimensions | note |",
         "|---|---|---|---|---|",
         vapply(rows, function(r) sprintf("| `%s` | %s | %s | %s | %s |",
           r$package,
@@ -101,6 +116,10 @@ md <- c("### Package risk (newly added)", "",
           band(r$score),
           ifelse(nzchar(r$weak), r$weak, "-"),
           ifelse(nzchar(r$note), r$note, "-")), character(1)),
+        "",
+        "",
+        "> **Higher score = higher risk.** `summarize_scores()` returns a risk score,",
+        "> so 0.42 is better than 0.69. Verified against known packages.",
         "",
         "> Scores reflect development practice and community trust, not statistical",
         "> correctness. Correctness is established by Performance Qualification.")

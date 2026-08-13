@@ -54,4 +54,9 @@ gates:
   forbidden_verdicts:
     - FAIL_DEVIATION
     - FAIL_NONDETERMINISM
-  riskmetric_min: 0.5
+  # riskmetric's summarize_scores() returns a RISK score -- higher is worse.
+  # This was written `riskmetric_min: 0.5`, which as a minimum gate would have
+  # rejected the best-maintained packages and passed the worst. It never fired
+  # because riskmetric was never installed, so the inversion was never exposed.
+  # Measured for calibration: dplyr 0.418, cli 0.429, utils 0.687.
+  package_risk_max: 0.7
