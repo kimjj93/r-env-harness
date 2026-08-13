@@ -1,6 +1,6 @@
 {
   "r_version": "4.4.2",
-  "passed": 21, "failed": 0, "skipped": 0,
+  "passed": 36, "failed": 0, "skipped": 0,
   "strict": 20, "tolerant": 0,
   "max_abs_deviation": 0e+00,
   "tolerance_utilisation": null,
