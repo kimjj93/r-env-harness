@@ -17,6 +17,12 @@ suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
 delta_f <- if (length(args) >= 1) args[[1]] else "artifacts/delta.json"
 outdir  <- if (length(args) >= 2) args[[2]] else "artifacts"
+# Optional: a copy of the library from the image under validation. Without it
+# riskmetric assesses whatever happens to be installed on the CI runner, which
+# made a package's score depend on whether it was incidentally a dependency of
+# the scanner. Measured: dplyr scored 0.418 where installed and 0.95 where not.
+# That is a property of the runner, not of the package.
+image_lib <- if (length(args) >= 3) args[[3]] else Sys.getenv("IMAGE_LIB", "")
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
 emit <- function(rows, md) {
@@ -47,6 +53,25 @@ if (!length(new_pkgs)) {
 message("Scanning ", length(new_pkgs), " new package(s): ",
         paste(new_pkgs, collapse = ", "))
 
+# Put the image's library FIRST so a package present both there and on the
+# runner is assessed as the image installed it.
+if (nzchar(image_lib) && dir.exists(image_lib)) {
+  libs <- list.dirs(image_lib, recursive = TRUE, full.names = TRUE)
+  # A directory counts as a library only if it holds an installed package,
+  # i.e. <dir>/<pkg>/DESCRIPTION. Testing for the package directory alone also
+  # matched things like <pkg>/include, which are not libraries and would be
+  # prepended to the search path for no reason.
+  libs <- libs[vapply(libs, function(d) {
+    any(file.exists(file.path(d, new_pkgs, "DESCRIPTION")))
+  }, logical(1))]
+  if (length(libs)) {
+    .libPaths(c(libs, .libPaths()))
+    message("Assessing against image library: ", paste(libs, collapse = ", "))
+  } else {
+    message("WARNING: image library given but no scanned package found in it: ", image_lib)
+  }
+}
+
 if (!requireNamespace("riskmetric", quietly = TRUE)) {
   md <- c("### Package risk (newly added)", "",
           sprintf("New packages: %s", paste(sprintf("`%s`", new_pkgs), collapse = ", ")),
@@ -67,8 +92,13 @@ for (p in new_pkgs) {
     # scanned package is usually NOT installed here. Let riskmetric resolve it
     # locally when it can and fall back to the CRAN remote when it cannot, so
     # the source of the assessment is explicit rather than accidental.
-    ref <- tryCatch(riskmetric::pkg_ref(p),
-                    error = function(e) riskmetric::pkg_ref(p, source = "pkg_cran_remote"))
+    # Record WHERE the assessment came from. A score whose provenance is
+    # invisible cannot be compared across runs: the same package assessed as an
+    # installed library and as a remote CRAN entry gets materially different
+    # numbers, and without the source recorded the difference looks like drift.
+    src <- if (nzchar(find.package(p, quiet = TRUE)[1] %||% "")) "installed" else "cran_remote"
+    ref <- if (src == "installed") riskmetric::pkg_ref(p, source = "pkg_install")
+           else riskmetric::pkg_ref(p, source = "pkg_cran_remote")
     sc  <- riskmetric::pkg_score(riskmetric::pkg_assess(ref))
 
     # summarize_scores() is the documented way to collapse the assessment
@@ -93,7 +123,7 @@ for (p in new_pkgs) {
     }
     list(package = p, score = score,
          weak = if (length(weak)) paste(weak, collapse = ", ") else "",
-         note = "")
+         note = if (src == "installed") "" else "scored from CRAN metadata only")
   }, error = function(e) {
     list(package = p, score = NA_real_, weak = "",
          note = paste("assessment failed:", conditionMessage(e)))

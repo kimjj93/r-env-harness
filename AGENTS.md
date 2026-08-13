@@ -292,6 +292,13 @@ Read this before you start. These are not hypothetical.
 
   Common cause: A fallback path that was never exercised, because reaching it required the failure that prevented it running.
 
+**unverified-external-semantics** — seen 2 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
+
+- The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
+- Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
+
+  Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
+
 Do not edit this block by hand; it is regenerated from the learning log.
 To retire a lesson, write the rule you want into section 1 and set
 `promoted` on its log entries.

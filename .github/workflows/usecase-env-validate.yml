@@ -184,10 +184,30 @@ jobs:
       # this step reported success for the life of the project while producing
       # no score for any package. The scan exits non-zero only when it scores
       # nothing at all, which is a broken scanner rather than a risky package.
+      # Copy the library OUT of the image rather than installing the scanner IN.
+      # riskmetric otherwise assesses whatever the runner happens to have, and a
+      # package's score then depends on whether it was incidentally a dependency
+      # of the scanner rather than on the package itself.
+      - name: Extract image library for assessment
+        run: |
+          set -euo pipefail
+          CID=$(docker create r-env-harness/renv:${{ github.sha }})
+          LIBS=$(docker run --rm r-env-harness/renv:${{ github.sha }} \
+                   Rscript -e 'cat(paste(.libPaths(), collapse="\n"))')
+          mkdir -p imagelib
+          echo "$LIBS" | while read -r L; do
+            [ -z "$L" ] && continue
+            echo "copying $L"
+            docker cp "$CID:$L" "imagelib/$(echo "$L" | tr '/' '_')" || true
+          done
+          docker rm -f "$CID" >/dev/null
+          find imagelib -maxdepth 2 -type d | head -5
+          echo "packages copied: $(find imagelib -maxdepth 2 -name DESCRIPTION | wc -l)"
+
       - name: Package risk scan
         run: |
           Rscript usecases/r-environment/bin/riskmetric_scan.R \
-            artifacts/delta.json artifacts
+            artifacts/delta.json artifacts imagelib
 
       - name: Collect metrics row
         run: |
