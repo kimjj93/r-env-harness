@@ -84,14 +84,42 @@ forbidden       <- c("FAIL_DEVIATION", "FAIL_NONDETERMINISM")
 # lines. The harness enforces thresholds without knowing what any field means,
 # which is what lets a different domain add its own gate without touching this.
 extra_gates <- list()
+declared_gate_keys <- character(0)
 if (file.exists(cand_file)) {
   y <- readLines(cand_file, warn = FALSE)
   m <- grep("^\\s*checks_failed_max:", y, value = TRUE)
   if (length(m)) gate_checks_max <- as.numeric(sub(".*:\\s*", "", m[1]))
-  for (line in grep("^\\s{4,}[a-z_]+_(min|max):", y, value = TRUE)) {
-    key <- trimws(sub(":.*", "", line))
-    val <- suppressWarnings(as.numeric(sub(".*:\\s*", "", line)))
-    if (!is.na(val) && !key %in% c("checks_failed_max")) extra_gates[[key]] <- val
+
+  # Read the `gates:` block by indentation rather than by a fixed indent width.
+  # This previously required four or more leading spaces while the manifest was
+  # written with two, so the block parsed to nothing and every declared
+  # threshold was silently absent -- the gates were not lenient, they were not
+  # there. Anchoring on the block and its relative indent means reindenting the
+  # file cannot quietly disarm it.
+  start <- grep("^(\\s*)gates:\\s*$", y)
+  if (length(start)) {
+    i <- start[1]
+    base_indent <- nchar(sub("gates:.*", "", y[i]))
+    j <- i + 1L
+    while (j <= length(y)) {
+      line <- y[j]
+      if (!nzchar(trimws(line))) { j <- j + 1L; next }
+      indent <- nchar(sub("^(\\s*).*", "\\1", line))
+      if (indent <= base_indent) break            # dedent ends the block
+      body <- trimws(line)
+      if (!startsWith(body, "#") && !startsWith(body, "-") &&
+          grepl("^[a-z_]+_(min|max):", body)) {
+        key <- sub(":.*", "", body)
+        val <- suppressWarnings(as.numeric(trimws(sub("^[^:]*:", "", body))))
+        if (!key %in% c("checks_failed_max")) {
+          declared_gate_keys <- c(declared_gate_keys, key)
+          # A threshold that is present but unreadable must not vanish. Record
+          # the key either way so the dead-gate report can still name it.
+          if (!is.na(val)) extra_gates[[key]] <- val
+        }
+      }
+      j <- j + 1L
+    }
   }
 }
 
@@ -171,6 +199,51 @@ summary_rows <- lapply(names(by_id), function(id) {
 })
 summary_df <- do.call(rbind, summary_rows)
 summary_df <- summary_df[order(summary_df$candidate_id), , drop = FALSE]
+
+# ---- a declared gate that never evaluates is not a gate --------------------
+#
+# passes_gates() skips a threshold when the row does not carry the field, which
+# is right for one row: a candidate that legitimately has nothing to say about a
+# dimension should not be failed for silence.
+#
+# It is wrong for ALL rows. If a gate is declared and no row in the window ever
+# carried its field, the gate has never once been evaluated -- and because
+# skipping is silent, it reports the same way as passing. This is not
+# hypothetical: a threshold in this repository sat in a use case manifest
+# looking like protection for the whole life of the project, while the tool
+# meant to produce its input was never installed anywhere, so every row carried
+# null and the gate never fired.
+#
+# This is the fourth time a gate that could not find its input answered weaker
+# instead of failing. Report it as loudly as a breach, because a gate believed
+# to be active and in fact dead is worse than no gate: it buys confidence that
+# was never earned.
+dead_gates <- character(0)
+# A threshold whose value would not parse is reported too. The detector reads
+# the same list the evaluator does, so if a gate never makes it into that list
+# the detector is as blind as the evaluator -- which is exactly how the
+# indentation mismatch above went unnoticed.
+for (key in setdiff(declared_gate_keys, names(extra_gates))) {
+  dead_gates <- c(dead_gates, sprintf("%s (declared but its value did not parse as a number)", key))
+}
+for (key in names(extra_gates)) {
+  field <- sub("_(min|max)$", "", key)
+  observed <- vapply(by_id, function(r) {
+    v <- suppressWarnings(as.numeric(r[[field]] %||% NA))
+    !is.na(v)
+  }, logical(1))
+  if (!any(observed)) dead_gates <- c(dead_gates, sprintf("%s (field `%s` never measured)", key, field))
+}
+if (length(dead_gates)) {
+  msg <- paste0(
+    "DEAD GATE: declared but never evaluated across ", length(by_id), " candidate row(s):\n  - ",
+    paste(dead_gates, collapse = "\n  - "),
+    "\nEither start measuring the field, or remove the threshold. A gate that ",
+    "cannot be evaluated is not protection, it is the appearance of protection."
+  )
+  message(msg)
+  writeLines(dead_gates, file.path(outdir, "dead-gates.txt"))
+}
 
 write.csv(summary_df, file.path(outdir, "weekly-summary.csv"), row.names = FALSE)
 

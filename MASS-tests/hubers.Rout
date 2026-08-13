@@ -1,0 +1,29 @@
+
+R version 4.6.1 (2026-06-24) -- "Happy Hop"
+Copyright (C) 2026 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin23
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(MASS)
+> x <- c(rep(1.407,3), rep(1.422,4), 1.597, 1.597, rep(1.64,19), 1.649,
++        1.664, 1.664, 1.67, 1.672, 1.672, 1.787, 4.42, 4.44, rep(6.55,3),
++        rep(6.79,14), rep(7.19,,73), 9.00, 9.38, rep(9.41,10))
+> hubers(x) # failed to converge in MASS 7.3-9.
+$mu
+[1] 7.19
+
+$s
+[1] 0
+
+> 

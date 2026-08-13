@@ -77,7 +77,7 @@ One JSON object per run, appended to `evidence/metrics/metrics.jsonl`:
   "pq_strict": 12, "pq_tolerant": 6,
   "max_abs_deviation": 1.2e-14,
   "result_checksums": {"adsl": "...", "adae": "..."},
-  "riskmetric_min": 0.81,
+  "package_risk": 0.42,
   "delta_churn": 7,
   "tracks_agree": true,
   "verdict": "PASS_WITH_CHANGES",

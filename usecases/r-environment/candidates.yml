@@ -54,4 +54,19 @@ gates:
   forbidden_verdicts:
     - FAIL_DEVIATION
     - FAIL_NONDETERMINISM
-  riskmetric_min: 0.5
+  # riskmetric's summarize_scores() returns a RISK score -- higher is worse.
+  # This was written `riskmetric_min: 0.5`, which as a minimum gate would have
+  # rejected the best-maintained packages and passed the worst. It never fired
+  # because riskmetric was never installed, so the inversion was never exposed.
+  #
+  # Calibrated against a full scan of this environment, counting only packages
+  # this repository chose (packages shipping with R are scored and reported but
+  # excluded, since gating on them would block every candidate on properties of
+  # R itself): median 0.51, dplyr 0.489, cli 0.503, admiral 0.554,
+  # pharmaversesdtm 0.608. 0.7 sits above the observed spread with headroom,
+  # so it catches a genuinely poorly-maintained addition without firing on the
+  # pharmaverse stack as it stands.
+  #
+  # This threshold is a starting point, not a derived constant. It should move
+  # on evidence from the research loop, in a PR that shows the distribution.
+  package_risk_max: 0.7

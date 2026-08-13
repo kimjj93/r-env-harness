@@ -159,14 +159,60 @@ jobs:
           VERDICT=$(python3 -c "import json;print(json.load(open('artifacts/delta.json'))['verdict'])")
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
 
-      - name: Package risk scan
-        continue-on-error: true
+      # Deliberately NOT run inside the validated image. {riskmetric} is tooling
+      # that inspects the environment; installing it into the image would add a
+      # package to the very library under validation and show up in the manifest
+      # as environment drift the change never asked for. It ran in-image for most
+      # of this project's life and reported "riskmetric unavailable" for every
+      # package on every run -- honest output nobody read, feeding a gate that
+      # therefore never once evaluated.
+      - name: Set up R for risk tooling
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+          use-public-rspm: true
+
+      - name: Install riskmetric (runner tooling, not image)
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::riskmetric
+            any::jsonlite
+          cache-version: riskmetric-1
+
+      # Deliberately NOT continue-on-error. It was, and that is precisely why
+      # this step reported success for the life of the project while producing
+      # no score for any package. The scan exits non-zero only when it scores
+      # nothing at all, which is a broken scanner rather than a risky package.
+      # Copy the library OUT of the image rather than installing the scanner IN.
+      # riskmetric otherwise assesses whatever the runner happens to have, and a
+      # package's score then depends on whether it was incidentally a dependency
+      # of the scanner rather than on the package itself.
+      - name: Extract image library for assessment
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
-            r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/usecases/r-environment/bin/riskmetric_scan.R \
-              /project/artifacts/delta.json /project/artifacts
+          set -euo pipefail
+          CID=$(docker create r-env-harness/renv:${{ github.sha }})
+          LIBS=$(docker run --rm r-env-harness/renv:${{ github.sha }} \
+                   Rscript -e 'cat(paste(.libPaths(), collapse="\n"))')
+          mkdir -p imagelib
+          echo "$LIBS" | while read -r L; do
+            [ -z "$L" ] && continue
+            echo "copying $L"
+            docker cp "$CID:$L" "imagelib/$(echo "$L" | tr '/' '_')" || true
+          done
+          docker rm -f "$CID" >/dev/null
+          find imagelib -maxdepth 2 -type d | head -5
+          COPIED=$(find imagelib -maxdepth 3 -name DESCRIPTION | wc -l)
+          echo "packages copied: $COPIED"
+          if [ "$COPIED" -eq 0 ]; then
+            echo "::error::No packages were copied out of the image; the risk scan would silently fall back to CRAN metadata."
+            exit 1
+          fi
+
+      - name: Package risk scan
+        run: |
+          Rscript usecases/r-environment/bin/riskmetric_scan.R \
+            artifacts/delta.json artifacts imagelib
 
       - name: Collect metrics row
         run: |

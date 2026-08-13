@@ -28,13 +28,27 @@ num <- function(x, d = NA) {
   v <- suppressWarnings(as.numeric(x)); if (is.na(v)) d else v
 }
 
-risk_min <- NA_real_
+# riskmetric's summarize_scores() is a RISK score: higher is worse. The worst
+# package in the set is therefore the MAXIMUM, not the minimum. This was
+# recorded as `riskmetric_min` taking min() -- which reported the safest package
+# in the change as if it characterised the change.
+#
+# The field is `package_risk` because the harness resolves a gate named
+# `<field>_max` to the field `<field>`. Writing `riskmetric_min` here meant the
+# gate `riskmetric_min` looked for a field called `riskmetric`, which nothing
+# ever wrote. Gate and metric must be named as that convention requires or they
+# never meet.
+risk_max <- NA_real_
 if (!is.null(risk) && length(risk)) {
-  vals <- suppressWarnings(as.numeric(vapply(risk, function(r) {
+  # Only packages the repository actually chose feed the gate. Packages that
+  # ship with R are scored and reported, but gating on them would block every
+  # candidate on properties of R itself.
+  gated <- Filter(function(r) is.null(r$in_gate) || isTRUE(r$in_gate), risk)
+  vals <- suppressWarnings(as.numeric(vapply(gated, function(r) {
     if (is.null(r$score)) NA_real_ else as.numeric(r$score)
   }, numeric(1))))
   vals <- vals[is.finite(vals)]
-  if (length(vals)) risk_min <- min(vals)
+  if (length(vals)) risk_max <- max(vals)
 }
 
 row <- list(
@@ -64,7 +78,7 @@ row <- list(
   result_checksums = if (!is.null(pq)) pq$result_checksums else NULL,
   delta_churn = if (!is.null(delta)) num(delta$layer3_packages$churn, 0) else NA,
   verdict     = if (!is.null(delta)) delta$verdict else "UNKNOWN",
-  riskmetric_min = risk_min,
+  package_risk = risk_max,
   status = env_or("HARNESS_STATUS", "success")
 )
 
