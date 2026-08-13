@@ -79,6 +79,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Needed to create the `learning-promotion` label if it is absent.
+      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,6 +128,14 @@ jobs:
         run: |
           set -euo pipefail
           BRANCH="skills/learning-promotion-$(date -u +%Y-%m-%d)"
+
+          # `gh pr create --label` fails outright if the label is absent, and
+          # this path may not run for months. Ensure it exists rather than
+          # discovering it is missing on the one day this matters.
+          gh label create learning-promotion \
+            --color 1D76DB \
+            --description "A lesson in evidence/learnings.jsonl has recurred and is proposed for AGENTS.md" \
+            2>/dev/null || true
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

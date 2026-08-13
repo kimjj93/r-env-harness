@@ -217,6 +217,10 @@ Rules for entries:
 - **Reuse an existing `recurrence_key`** when you hit a lesson already recorded.
   That is the entire mechanism by which a repeated mistake becomes a rule.
   Inventing a new key for the same problem hides the pattern.
+- **Name the key after the lesson, not the mechanism that produced it.**
+  `set-e-kills-its-own-guard` describes one bug and can never be reused;
+  `untested-rare-path` describes the mistake and has since been recorded twice.
+  A key too specific to reuse is a lesson that can never be promoted.
 - Never delete or rewrite someone else's entry. The log is append-only.
 - Do not edit the generated block below by hand. It is produced by
   `learning-promote.yml` running `harness/promote_learnings.R`. If a gate tells
@@ -244,6 +248,13 @@ Read this before you start. These are not hypothetical.
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
+
+**untested-rare-path** — seen 2 times, affects `AGENTS.md`
+
+- Under set -e a helper ending in grep killed the step before its fallback could run _(failure, pr:8)_
+- The promotion PR step would have failed on a label that did not exist _(failure, pr:22)_
+
+  Common cause: A fallback path that was never exercised, because reaching it required the failure that prevented it running.
 
 Do not edit this block by hand; it is regenerated from the learning log.
 To retire a lesson, write the rule you want into section 1 and set
