@@ -28,16 +28,36 @@ If it is not in git, it did not happen.
 
 A **layer root** is any directory carrying its own `AGENTS.md`: the repository
 root for the harness, and each use case root. Inside a layer, write paths
-relative to that layer — a skill under `usecases/<x>/skills/` refers to
-`env/renv/renv.lock`, not to the full path from the repository root.
+relative to that layer — a skill inside a use case refers to
+<!-- drift-ignore-next-line -->
+`env/pins.lock`, not to `usecases/<that-use-case>/env/pins.lock`.
 
-This is what keeps a use case relocatable. Spelling out `usecases/r-environment/`
+This is what keeps a use case relocatable. Spelling out the use case directory
 in every document would mean renaming that one directory silently invalidates
 every instruction inside it.
 
 Use a leading `/` when you specifically mean the repository root, as in
 `/harness.yml`. The drift detector understands all three readings and complains
 only when none of them lands on a real file.
+
+### When a path is an example, not a reference
+
+The rule above has an edge the detector cannot infer: the sentence you just read
+*illustrates* a path rather than pointing at a file. Mark such lines so the
+detector skips them:
+
+```markdown
+<!-- drift-ignore-next-line -->
+`some/illustrative/path.R` shown to explain a convention, not to reference a file.
+```
+
+Use it sparingly and only for genuine illustrations. It is deliberately scoped to
+a single line: an exemption that covered a whole file would let one commit
+silence a document, and an escape hatch nobody notices in a diff is how a gate
+quietly stops being a gate.
+
+If you find yourself reaching for it to make a real finding go away, the finding
+is the thing to fix.
 
 ---
 
@@ -294,6 +314,13 @@ Read this before you start. These are not hypothetical.
 - The gate key and the metric field were named so they could never meet _(failure, pr:29)_
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
+
+**detector-reports-its-own-output** — seen 2 times, affects `.github/workflows/skills-drift.yml`
+
+- The drift detector triggered on push to main and its own report was merged to main, so it re-detected unfixed drift forever _(failure, pr:27)_
+- The loop guard compared every '- ' line in the previous report, so a resolution section written by a reviewer would have restarted the loop _(failure, pr:28)_
+
+  Common cause: A detector whose output lands in the tree it inspects has no fixed point unless it compares against what it already reported.
 
 **untested-rare-path** — seen 2 times, affects `AGENTS.md`
 

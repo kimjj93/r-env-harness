@@ -65,7 +65,18 @@ jobs:
             # `|| true` matters: under `set -o pipefail`, grep finding nothing
             # returns 1 and would abort the whole scan. A doc that references no
             # paths is normal, not an error.
-            grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' "$f" 2>/dev/null \
+            # Documentation sometimes writes a path to ILLUSTRATE a convention
+            # rather than to point at a file. AGENTS.md 0 explains how paths are
+            # written by showing one, and the detector promptly reported that
+            # explanation as drift -- the rule flagging the sentence that
+            # defines it. Lines marked with an ignore comment are skipped.
+            #
+            # The marker is line-scoped on purpose. A file-scoped or
+            # directory-scoped exemption would let one commit silence a whole
+            # document, and an escape hatch nobody can see in a diff is how a
+            # gate quietly stops being a gate.
+            sed '/<!-- drift-ignore-next-line -->/,+1d' "$f" \
+              | grep -oE '`[a-zA-Z0-9_./-]+\.(R|yml|json|lock|nix|md|txt|qmd)`' 2>/dev/null \
               | tr -d '`' | sort -u | while read -r ref; do
                 case "$ref" in */*) ;; *) continue ;; esac
                 # A document may legitimately write a path relative to itself.
@@ -146,9 +157,16 @@ jobs:
           # never suppressed.
           prev=$(ls -1 evidence/drift/*-drift.md 2>/dev/null | sort | tail -1)
           if [ -n "$prev" ] && [ "$drift" = "1" ]; then
-            # Compare only the finding lines; the header carries a commit SHA
-            # that differs on every run by construction.
-            if diff -q <(grep '^- ' "$prev" | sort) /tmp/drift.md >/dev/null 2>&1; then
+            # Compare only the bullets inside "## Findings". The header carries
+            # a commit SHA that differs on every run by construction, and a
+            # merged report may later gain a resolution section written by
+            # whoever triaged it. Matching every "- " line in the file would
+            # fold that commentary into the comparison, so a report and its own
+            # follow-up notes would stop looking equal and the loop would
+            # silently resume. Scope the extraction to the section that holds
+            # findings, and nothing else can perturb it.
+            extract () { awk '/^## Findings$/{f=1;next} /^## /{f=0} f && /^- /' "$1" | sort; }
+            if diff -q <(extract "$prev") /tmp/drift.md >/dev/null 2>&1; then
               echo "::notice::Drift is unchanged since $prev. Already reported; not reporting again."
               drift=0
             fi
