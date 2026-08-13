@@ -197,6 +197,37 @@ helper_env_mismatch_reasons <- function(meta, critical_packages = character(0)) 
 # The assertion.
 # ---------------------------------------------------------------------------
 
+# Shape must match exactly, on both paths.
+#
+# A numeric tolerance is a statement about floating-point arithmetic: the same
+# computation, performed differently, lands a little way from where it did
+# before. It is NOT a licence for the answer to change shape. A 2x3 matrix and
+# a 3x2 matrix holding the same six numbers have a maximum absolute deviation
+# of zero once flattened, and so does a vector whose names have all changed.
+# Comparing only flattened values therefore passes results that are not the
+# same result at all.
+#
+# In this domain that distinction is the whole point: an analysis dataset that
+# changed dimensions but stayed numerically close is a different dataset, not a
+# tolerable deviation. So structure is compared exactly and only the values are
+# allowed to move within tolerance.
+#
+# Returns NA_character_ when the shapes agree, otherwise the attribute that
+# differs, so the report can say which.
+helper_structural_mismatch <- function(object, reference) {
+  checks <- list(
+    length   = function(a, b) length(a) == length(b),
+    dim      = function(a, b) identical(dim(a), dim(b)),
+    names    = function(a, b) identical(names(a), names(b)),
+    dimnames = function(a, b) identical(dimnames(a), dimnames(b)),
+    class    = function(a, b) identical(class(a), class(b))
+  )
+  for (nm in names(checks)) {
+    if (!isTRUE(checks[[nm]](object, reference))) return(nm)
+  }
+  NA_character_
+}
+
 #' Compare an object against a stored reference, strictly or tolerantly.
 #'
 #' @param object          value computed in the live environment
@@ -222,6 +253,8 @@ helper_expect_reference_match <- function(object, reference, meta, case,
   }
   if (!is.finite(max_dev)) max_dev <- NA_real_
 
+  shape_mismatch <- helper_structural_mismatch(object, reference)
+
   if (strict) {
     applied <- 0
     path    <- "Strict (exact)"
@@ -229,7 +262,7 @@ helper_expect_reference_match <- function(object, reference, meta, case,
   } else {
     applied <- tolerance
     path    <- "Tolerant"
-    passed  <- !is.na(max_dev) && max_dev <= tolerance
+    passed  <- is.na(shape_mismatch) && !is.na(max_dev) && max_dev <= tolerance
     if (is.na(max_dev)) {
       # Non-numeric content cannot be compared tolerantly; fall back to
       # structural equality rather than silently passing.
@@ -245,15 +278,24 @@ helper_expect_reference_match <- function(object, reference, meta, case,
 
   if (!passed && !strict) {
     reasons <- helper_env_mismatch_reasons(meta, critical_packages)
+    if (!is.na(shape_mismatch)) {
+      # Lead with this: a shape change is a different result, not a numerical
+      # deviation, and no environment tolerance can excuse it.
+      reasons <- c(sprintf("STRUCTURE CHANGED (%s differs) - not a tolerance question",
+                           shape_mismatch),
+                   reasons)
+    }
     message(sprintf("[%s] tolerant comparison FAILED. Environment differences:\n  %s",
                     case, paste(reasons, collapse = "\n  ")))
   }
 
   testthat::expect_true(
     passed,
-    label = sprintf("%s [%s, tol=%g, max_abs_dev=%s]",
+    label = sprintf("%s [%s, tol=%g, max_abs_dev=%s%s]",
                     case, path, applied,
-                    ifelse(is.na(max_dev), "n/a", format(max_dev, digits = 3)))
+                    ifelse(is.na(max_dev), "n/a", format(max_dev, digits = 3)),
+                    ifelse(is.na(shape_mismatch), "",
+                           sprintf(", STRUCTURE: %s differs", shape_mismatch)))
   )
 }
 

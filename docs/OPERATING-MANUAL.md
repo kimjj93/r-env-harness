@@ -283,6 +283,45 @@ not running is worse than a gate that is loudly broken.
   **fatal hard cap**, because a derivation fed absurd inputs produces an absurd
   number.
 
+These are recorded permanently in `evidence/learnings.jsonl`, not just here. This
+section is prose a human wrote once; the log is a structured record that agents
+append to as they work and that `learning-promote.yml` reads. When the same
+lesson lands there twice, it is proposed for `AGENTS.md` automatically.
+
+---
+
+## 8a. Recording what the work taught you
+
+If something cost you real time and was not obvious from reading the repository,
+append it to the learning log before you finish:
+
+```
+Rscript harness/learnings.R add evidence/learnings.jsonl \
+  signal_type=failure \
+  recurrence_key=short-slug-naming-the-lesson \
+  summary='one specific line' \
+  detail='what happened, with the measurement if there was one' \
+  root_cause='why it was possible' \
+  target_artifact=AGENTS.md \
+  source=pr:123
+Rscript harness/learnings.R validate evidence/learnings.jsonl
+```
+
+The `recurrence_key` is the important field. **Reuse an existing key** when you
+hit a lesson that is already recorded — that reuse is the entire mechanism by
+which a repeated mistake becomes a rule. A new key for an old problem hides the
+pattern and the lesson stays an anecdote forever.
+
+You will not normally open a PR for this. Add the entry alongside the work that
+taught it to you, in the same pull request.
+
+**What you review, and how often.** `learning-promote.yml` opens a PR only when a
+lesson crosses the threshold, which should be rare. It adds evidence to
+`AGENTS.md`, never rule text — deciding whether a recurring mistake warrants a
+hard rule in §1 is your judgement, made while reviewing that PR. If you decide it
+does not, set `promoted` on the entries with your reason; they then retire from
+the generated block and stop being proposed.
+
 ---
 
 ## 9. What this is not

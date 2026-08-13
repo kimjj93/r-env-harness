@@ -16,6 +16,11 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # Required by `gh run list` when measuring agent effectiveness. Without it
+  # that step fails, and because it is continue-on-error the failure would be
+  # invisible -- the metric would simply never appear. See the recurring
+  # `silent-gate-degradation` lesson in AGENTS.md.
+  actions: read
 
 concurrency:
   group: weekly-proposal
@@ -77,6 +82,25 @@ jobs:
             echo "::notice::No pull request opened: $REASON"
           fi
 
+      - name: Measure how well the instructions are working
+        id: agentmetrics
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # The environment telemetry above says nothing about whether an agent
+          # reading AGENTS.md could actually do the job. This does. It is
+          # advisory: continue-on-error, because a measurement of the agents
+          # must never be able to block a proposal about the environment.
+          gh pr list --state all --limit 100 \
+            --json number,author,headRefName,labels,title > artifacts/prs.json
+          gh run list --workflow env-validate.yml --limit 300 \
+            --json headBranch,conclusion,createdAt > artifacts/runs.json
+          Rscript harness/agent_metrics.R artifacts/prs.json artifacts/runs.json artifacts >/dev/null
+          cat artifacts/agent-metrics.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Open exactly one pull request
         if: steps.decide.outputs.recommendation == 'PROPOSE' && steps.propose.outputs.changed == 'true'
         env:
@@ -91,6 +115,17 @@ jobs:
           git checkout -b "$BRANCH"
 
           cp artifacts/weekly-summary.csv evidence/proposals/ 2>/dev/null || true
+          # Carried into the proposal body so the human sees the environment
+          # verdict and the agent-effectiveness figures in one read, rather
+          # than in a dashboard nobody opens.
+          PROPOSAL_MD="evidence/proposals/$(date -u +%Y-%m-%d)-${ID}.md"
+          if [ -f artifacts/agent-metrics.md ] && [ -f "$PROPOSAL_MD" ]; then
+            { echo; echo "---"; echo; cat artifacts/agent-metrics.md; } >> "$PROPOSAL_MD"
+          fi
+          if [ -f artifacts/agent-metrics.jsonl ]; then
+            mkdir -p evidence/metrics
+            cat artifacts/agent-metrics.jsonl >> evidence/metrics/agent-metrics.jsonl
+          fi
           rm -f PROPOSAL.md .proposal-status .proposal-status.json .proposal-id
 
           git add -A
