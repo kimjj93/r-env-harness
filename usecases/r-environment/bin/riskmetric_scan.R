@@ -49,8 +49,11 @@ if (!requireNamespace("riskmetric", quietly = TRUE)) {
   md <- c("### Package risk (newly added)", "",
           sprintf("New packages: %s", paste(sprintf("`%s`", new_pkgs), collapse = ", ")),
           "",
-          "> `{riskmetric}` is not installed in this image, so scores could not be",
-          "> computed. Reporting the gap rather than omitting the section.")
+          "> `{riskmetric}` is not available to the scanner, so scores could not be",
+          "> computed. Reporting the gap rather than omitting the section.",
+          "",
+          "> This is a **tooling** failure, not a finding about these packages.",
+          "> The scan runs on the CI runner; check the riskmetric install step.")
   emit(lapply(new_pkgs, function(p) list(package = p, score = NA, note = "riskmetric unavailable")), md)
   quit(status = 0L, save = "no")
 }
@@ -58,7 +61,12 @@ if (!requireNamespace("riskmetric", quietly = TRUE)) {
 rows <- list()
 for (p in new_pkgs) {
   res <- tryCatch({
-    ref <- riskmetric::pkg_ref(p)
+    # This runs on the CI runner rather than inside the validated image, so a
+    # scanned package is usually NOT installed here. Let riskmetric resolve it
+    # locally when it can and fall back to the CRAN remote when it cannot, so
+    # the source of the assessment is explicit rather than accidental.
+    ref <- tryCatch(riskmetric::pkg_ref(p),
+                    error = function(e) riskmetric::pkg_ref(p, source = "pkg_cran_remote"))
     as <- riskmetric::pkg_assess(ref)
     sc <- riskmetric::pkg_score(as)
     score <- suppressWarnings(as.numeric(sc$pkg_score[[1]]))

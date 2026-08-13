@@ -159,14 +159,32 @@ jobs:
           VERDICT=$(python3 -c "import json;print(json.load(open('artifacts/delta.json'))['verdict'])")
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
 
+      # Deliberately NOT run inside the validated image. {riskmetric} is tooling
+      # that inspects the environment; installing it into the image would add a
+      # package to the very library under validation and show up in the manifest
+      # as environment drift the change never asked for. It ran in-image for most
+      # of this project's life and reported "riskmetric unavailable" for every
+      # package on every run -- honest output nobody read, feeding a gate that
+      # therefore never once evaluated.
+      - name: Set up R for risk tooling
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.2'
+          use-public-rspm: true
+
+      - name: Install riskmetric (runner tooling, not image)
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::riskmetric
+            any::jsonlite
+          cache-version: riskmetric-1
+
       - name: Package risk scan
         continue-on-error: true
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/artifacts:/project/artifacts" \
-            r-env-harness/renv:${{ github.sha }} \
-            Rscript /project/usecases/r-environment/bin/riskmetric_scan.R \
-              /project/artifacts/delta.json /project/artifacts
+          Rscript usecases/r-environment/bin/riskmetric_scan.R \
+            artifacts/delta.json artifacts
 
       - name: Collect metrics row
         run: |

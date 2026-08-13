@@ -172,6 +172,44 @@ summary_rows <- lapply(names(by_id), function(id) {
 summary_df <- do.call(rbind, summary_rows)
 summary_df <- summary_df[order(summary_df$candidate_id), , drop = FALSE]
 
+# ---- a declared gate that never evaluates is not a gate --------------------
+#
+# passes_gates() skips a threshold when the row does not carry the field, which
+# is right for one row: a candidate that legitimately has nothing to say about a
+# dimension should not be failed for silence.
+#
+# It is wrong for ALL rows. If a gate is declared and no row in the window ever
+# carried its field, the gate has never once been evaluated -- and because
+# skipping is silent, it reports the same way as passing. This is not
+# hypothetical: a threshold in this repository sat in a use case manifest
+# looking like protection for the whole life of the project, while the tool
+# meant to produce its input was never installed anywhere, so every row carried
+# null and the gate never fired.
+#
+# This is the fourth time a gate that could not find its input answered weaker
+# instead of failing. Report it as loudly as a breach, because a gate believed
+# to be active and in fact dead is worse than no gate: it buys confidence that
+# was never earned.
+dead_gates <- character(0)
+for (key in names(extra_gates)) {
+  field <- sub("_(min|max)$", "", key)
+  observed <- vapply(by_id, function(r) {
+    v <- suppressWarnings(as.numeric(r[[field]] %||% NA))
+    !is.na(v)
+  }, logical(1))
+  if (!any(observed)) dead_gates <- c(dead_gates, sprintf("%s (field `%s` never measured)", key, field))
+}
+if (length(dead_gates)) {
+  msg <- paste0(
+    "DEAD GATE: declared but never evaluated across ", length(by_id), " candidate row(s):\n  - ",
+    paste(dead_gates, collapse = "\n  - "),
+    "\nEither start measuring the field, or remove the threshold. A gate that ",
+    "cannot be evaluated is not protection, it is the appearance of protection."
+  )
+  message(msg)
+  writeLines(dead_gates, file.path(outdir, "dead-gates.txt"))
+}
+
 write.csv(summary_df, file.path(outdir, "weekly-summary.csv"), row.names = FALSE)
 
 # ---- rank the eligible ----------------------------------------------------

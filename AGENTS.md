@@ -82,11 +82,23 @@ regardless of the quality of its output.
    - state the hard cap the derivation can never exceed, and why the cap is safe
      for a reported clinical result.
 
+7. **A gate you declare must be a gate that evaluates.** Declaring a threshold on
+   a field nothing measures is not a weak gate, it is no gate wearing the costume
+   of one — and it is worse than having none, because it buys confidence nobody
+   earned. Before adding a threshold, confirm something actually writes that field
+   on a normal run, and check the recorded value is not null.
+
+   The research aggregator now fails loudly when a declared threshold was never
+   evaluated across an entire window. If you see a dead gate reported, the fix is
+   to start measuring the field or to delete the threshold and say why in the PR.
+   Leaving it in place because "it will work once we wire it up" is how it got
+   there the first time.
+
    A derived criterion with no cap is an unbounded criterion. Always bound it.
-7. **Never introduce a floating version.** No `latest` tags, no unpinned
+8. **Never introduce a floating version.** No `latest` tags, no unpinned
    `install.packages()`, no undated repository URLs. Every dependency resolves to
    a fixed version, date, or digest.
-8. **Never commit secrets, credentials, or patient data.** All clinical data in
+9. **Never commit secrets, credentials, or patient data.** All clinical data in
    this repository is synthetic.
 
 ## 2. Branch and commit conventions
