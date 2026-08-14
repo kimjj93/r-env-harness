@@ -13,7 +13,7 @@
 # or a platform constraint cost half a day, that knowledge landed in a commit
 # message and stayed there. The next agent started from zero.
 #
-# `skills-drift.yml` does not close this gap. It detects mechanical drift --
+# `weekly.yml` does not close this gap. It detects mechanical drift --
 # a SKILL.md referencing a path that no longer exists, a workflow nobody
 # documented. It cannot detect that a rule is present, accurate, and still
 # routinely misunderstood.
@@ -92,7 +92,7 @@ do_validate <- function(path) {
       problems <- c(problems, sprintf("line %d: recurrence_key `%s` must be lowercase-hyphenated", ln, key))
 
     # A learning that points at a file which does not exist cannot ever be
-    # acted on. This is the same referential check skills-drift applies to
+    # acted on. This is the same referential check the weekly drift job applies to
     # SKILL.md, for the same reason: a dangling pointer is worse than silence.
     tgt <- e$target_artifact %||% ""
     if (nzchar(tgt) && !file.exists(tgt))
@@ -129,7 +129,7 @@ do_summary <- function(path, out) {
   }
   L <- c(L, "",
          "A lesson seen once is an anecdote and stays here. A lesson seen twice",
-         "is a pattern and is proposed for the contract by `learning-promote.yml`.")
+         "is a pattern and is proposed for the contract by `weekly.yml`.")
 
   if (nzchar(out)) {
     dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)

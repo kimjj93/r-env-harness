@@ -8,6 +8,10 @@ The premise: AI agents do the work autonomously on branches, an unattended
 research loop fine-tunes proposals in the background using measured metrics,
 and a human only ever has to do one thing — **approve or deny a pull request**.
 
+> **New here? Read [START-HERE.md](START-HERE.md) instead — one page, and it is
+> genuinely all you need to operate this repository.** Everything below explains
+> *why* the machinery is built this way; you do not need it to use the harness.
+
 ---
 
 ## Two layers, and the seam between them
@@ -96,10 +100,10 @@ documentation file is not a control:
 1. **Repository ruleset on `main`** — direct pushes and force pushes blocked,
    pull request required, one approving review required, stale approvals
    dismissed on new commits, CODEOWNERS review required, and the
-   `env-validate` + `skills-lint` checks must pass.
+   `env-validate` + `lint` checks must pass.
 2. **`CODEOWNERS`** — every path is owned, so every PR needs a named human.
 3. **Workflow design** — AI reviews are posted as GitHub `COMMENT` reviews,
-   which **cannot** satisfy an approval requirement. `skills-lint` greps the
+   which **cannot** satisfy an approval requirement. `lint` greps the
    whole repository to prove no workflow can self-approve or self-merge.
 
 Layer 3 matters most. An agent asked to "get this merged" cannot comply even if
@@ -196,18 +200,18 @@ by making the base digest itself a research candidate the nightly loop tracks.
 | Workflow | Trigger | What it does | Human load |
 |---|---|---|---|
 | `env-validate.yml` | every PR | Builds both tracks, runs PQ inside the image, computes the four-layer delta, scans package risk, posts a sticky comment | none — a gate |
-| `skills-lint.yml` | every PR | Proves the governance rules are intact and no workflow can self-approve or self-merge | none — a gate |
+| `lint.yml` | every PR | Proves the governance rules are intact and no workflow can self-approve or self-merge | none — a gate |
 | `publish-image.yml` | merge to `main` | Signed, SBOM'd GHCR push; commits the digest to the lock file | none |
 | `agent-race.yml` | dispatch / `agent-race` label | Fans one task out to competing agents with different strategy briefs, then ranks them | none |
 | `ai-review.yml` | agent PR opened | Advisory `COMMENT` review — cannot approve | none |
 | `nightly-research.yml` | nightly cron | Explores candidate upgrades; writes to the `research/telemetry` branch | **zero** |
-| `weekly-proposal.yml` | Monday cron | Aggregates the week and opens **at most one** PR | **~1 review/week** |
-| `skills-drift.yml` | push to `main` | Detects instructions that no longer match reality | occasional |
-| `learning-promote.yml` | every PR / Monday cron | Validates the learning log; proposes a lesson for the contract once it has recurred | rare |
+| `weekly.yml` | Monday cron | Aggregates the week and opens **at most one** PR | **~1 review/week** |
+| `weekly.yml` | push to `main` | Detects instructions that no longer match reality | occasional |
+| `weekly.yml` | every PR / Monday cron | Validates the learning log; proposes a lesson for the contract once it has recurred | rare |
 
 ### The repository remembers its own mistakes
 
-`skills-drift.yml` catches *mechanical* drift — a skill referencing a path that
+`weekly.yml` catches *mechanical* drift — a skill referencing a path that
 no longer exists. It cannot catch a rule that is present, accurate, and still
 misread every time somebody works here. That knowledge only exists in what the
 work taught us, so it is written down.
@@ -217,7 +221,7 @@ whether the gap was **context**, **instruction**, **workflow**, or **failure**
 (the four signal types from Martin Fowler's [feedback flywheel][ff]). Agents are
 instructed to append to it (`AGENTS.md` §10); it costs one command.
 
-Recording is cheap on purpose. **Promotion is not.** `learning-promote.yml`
+Recording is cheap on purpose. **Promotion is not.** `weekly.yml`
 surfaces a lesson in `AGENTS.md` only once it has been recorded **twice**, on the
 reasoning that one occurrence is an anecdote and two in different places is a
 property of how this repository is built. Without that threshold the contract
@@ -259,7 +263,7 @@ Nothing it produces targets `main`. Findings append to
 `evidence/metrics/metrics.jsonl` on the `research/telemetry` branch, so hundreds
 of experiments cost exactly zero review time.
 
-`weekly-proposal.yml` then turns a week of that into **at most one** pull
+`weekly.yml` then turns a week of that into **at most one** pull
 request, with a generated `PROPOSAL.md` that answers, without the reviewer
 opening anything else: what changed, what it did to the results, how much
 tolerance headroom was consumed, what was rejected and why, and the references

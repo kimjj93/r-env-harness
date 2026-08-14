@@ -1,12 +1,15 @@
-name: skills-lint
-
-# Validates the governance layer itself.
+# Every check that runs against your pull request, in one place.
 #
-# The most important check here is the LAST one: it verifies that the
-# non-negotiable rules in AGENTS.md §1 are still present. Because agents may
-# propose changes to these files (step 4 of the loop), something has to prevent
-# a well-meaning agent from "simplifying" away the rules that keep humans in
-# control. That something is this job.
+# This file used to be two: skills-lint and the validate half of
+# learning-promote. They had identical triggers and did the same kind of work
+# -- read the tree, fail if it contradicts itself -- but appeared as two
+# separate entries in the Actions tab, which made the harness look like it had
+# more moving parts than it does.
+#
+# Job NAMES are load-bearing. A required status check resolves by job name, not
+# by file name, so `Governance lint` must keep that exact name or the branch
+# ruleset silently waits forever for a check that no longer exists.
+name: lint
 
 on:
   pull_request:
@@ -18,7 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+
+  governance:
     # This name is the required status check context in the branch ruleset.
     # Renaming it silently detaches the gate, so the ruleset must be updated
     # in the same change.
@@ -126,13 +130,18 @@ jobs:
           # mechanically so it cannot regress unnoticed.
           #
           # This file is excluded from the scan because it necessarily contains
-          # the very patterns it searches for.
-          if grep -rn --exclude=skills-lint.yml \
+          # the very patterns it searches for. The exclusion names this file,
+          # so it must be updated if the file is ever renamed -- when the three
+          # lint workflows merged into `lint.yml` the stale `skills-lint.yml`
+          # exclusion would have made this gate match its own source and fail
+          # every PR. Verified after the rename that the gate still passes on a
+          # clean tree and still fires on a planted violation.
+          if grep -rn --exclude=lint.yml \
                -e 'gh pr merge' -e 'pulls/.*/merge' -e 'enable-pull-request-automerge' \
                .github/workflows/ 2>/dev/null; then
             echo "::error::a workflow attempts to merge pull requests"; fail=1
           fi
-          if grep -rnE --exclude=skills-lint.yml \
+          if grep -rnE --exclude=lint.yml \
                -e 'event[:=][[:space:]]*.?APPROVE' \
                -e '--approve' \
                -e 'pr[[:space:]]+review[^|]*--approve' \
@@ -162,3 +171,36 @@ jobs:
             bash -n "$f" && echo "ok   $f" || { echo "FAIL $f"; fail=1; }
           done < <(grep -rl '^#!/usr/bin/env bash' harness tools 2>/dev/null)
           exit $fail
+
+  validate:
+    name: Learning log
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4.2"
+          use-public-rspm: true
+
+      - name: Install jsonlite
+        run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+
+      - name: Validate the learning log
+        run: Rscript harness/learnings.R validate evidence/learnings.jsonl
+
+      - name: The generated block must match the log
+        run: |
+          set -euo pipefail
+          cp AGENTS.md /tmp/AGENTS.before
+          Rscript harness/promote_learnings.R evidence/learnings.jsonl AGENTS.md 2 >/dev/null
+          if ! diff -q /tmp/AGENTS.before AGENTS.md >/dev/null; then
+            echo "::error file=AGENTS.md::The recurring-lessons block does not match evidence/learnings.jsonl."
+            echo "It is generated. Run: Rscript harness/promote_learnings.R evidence/learnings.jsonl AGENTS.md 2"
+            diff /tmp/AGENTS.before AGENTS.md || true
+            exit 1
+          fi
+          echo "Generated block is in sync with the log."
+
+      - name: Summary
+        run: Rscript harness/learnings.R summary evidence/learnings.jsonl >> "$GITHUB_STEP_SUMMARY"

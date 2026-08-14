@@ -30,7 +30,7 @@ having a single agent quietly split the difference.
 - Every claim in your pull request description must be backed by an artifact CI
   produced. Do not state a build time, a package count, or a deviation you did
   not measure.
-- `env-validate` and `skills-lint` must pass.
+- `env-validate` and `lint` must pass.
 - Never hand-edit a generated file or a committed fixture.
 
 ## What you will be scored on
