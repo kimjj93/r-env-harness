@@ -168,7 +168,7 @@ most consequential edit in the repository — and it is deliberately awkward.
 **Never regenerate fixtures on your laptop.** Use:
 
 ```bash
-gh workflow run build-fixtures.yml
+gh workflow run usecase-build-fixtures.yml
 ```
 
 This builds the validated image in CI, regenerates the baselines inside it,

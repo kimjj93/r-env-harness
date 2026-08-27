@@ -63,9 +63,13 @@ jobs:
           # A layer root is a directory carrying its own AGENTS.md: the repo root
           # for the harness, and each use case root. Documents inside a layer
           # write paths relative to that layer, which is what keeps a use case
-          # relocatable -- spelling out `usecases/r-environment/` in every skill
-          # would mean renaming the directory breaks every document in it. The
-          # convention is stated in AGENTS.md 0.
+          # relocatable -- spelling out the use case's own directory prefix in
+          # every skill would mean renaming the directory breaks every document
+          # in it. (This comment deliberately does not name that directory: this
+          # file is Layer 1, and tools/extract-template.sh fails the extraction
+          # if a domain path appears anywhere in the portable layer -- including
+          # inside a comment explaining why domain paths do not belong here.)
+          # The convention is stated in AGENTS.md 0.
           layer_root () {
             d=$(dirname "$1")
             while [ "$d" != "." ] && [ "$d" != "/" ]; do
@@ -352,8 +356,26 @@ jobs:
           # must never be able to block a proposal about the environment.
           gh pr list --state all --limit 100 \
             --json number,author,headRefName,labels,title > artifacts/prs.json
-          gh run list --workflow env-validate.yml --limit 300 \
+          # The gate workflow is resolved from harness.yml, never named here.
+          # `harness/usecase gate-workflow` fails if the declared file is
+          # missing, so a rename can no longer leave this query silently
+          # pointed at a retired workflow.
+          GATE=$(harness/usecase gate-workflow)
+          if [ -z "$GATE" ]; then
+            echo "::notice::No ci.gate_workflow declared; skipping agent metrics."
+            exit 0
+          fi
+          gh run list --workflow "$(basename "$GATE")" --limit 300 \
             --json headBranch,conclusion,createdAt > artifacts/runs.json
+          # A gate workflow with no runs in the window means this query is
+          # pointed at the wrong thing -- which is exactly how the stale
+          # `env-validate.yml` reference stayed invisible for two weeks.
+          RECENT=$(python3 -c "import json,datetime; cut=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=30)).isoformat(); print(sum(1 for r in json.load(open('artifacts/runs.json')) if (r.get('createdAt') or '')>cut))")
+          echo "Gate workflow $(basename "$GATE"): $RECENT run(s) in the last 30 days."
+          if [ "$RECENT" -eq 0 ]; then
+            echo "::error::Gate workflow '$(basename "$GATE")' has no runs in the last 30 days. Agent metrics would be computed from stale or empty data."
+            exit 1
+          fi
           Rscript harness/agent_metrics.R artifacts/prs.json artifacts/runs.json artifacts >/dev/null
           cat artifacts/agent-metrics.md >> "$GITHUB_STEP_SUMMARY"
 

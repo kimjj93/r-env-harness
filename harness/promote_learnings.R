@@ -46,6 +46,21 @@ END   <- "<!-- END GENERATED: recurring-lessons -->"
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
+# AGENTS.md is Layer 1: portable, and lifted wholesale by
+# tools/extract-template.sh into a repository with a different domain. A
+# learning's `target_artifact` points at a real file, which for a use-case
+# lesson is a path inside the use case. Writing that path verbatim meant every
+# lesson that recurred twice injected a domain path into the portable layer --
+# the learning loop slowly dissolving the boundary it is supposed to respect.
+# Two lessons had already leaked a concrete use case path into AGENTS.md and
+# broken template extraction.
+#
+# The path still carries useful information, so it is generalised rather than
+# dropped: the concrete use case directory becomes `<usecase>/`. The pattern is
+# structural (`usecases/<anything>/`), so this stays correct when the use case
+# is swapped -- which is the whole point.
+neutralise_path <- function(p) sub("^usecases/[^/]+/", "<usecase>/", p)
+
 stopifnot(file.exists(lfile), file.exists(agentsmd))
 
 lines   <- readLines(lfile, warn = FALSE)
@@ -78,7 +93,7 @@ if (length(qual) == 0) {
     grp <- Filter(function(e) identical(e$recurrence_key %||% "", k), open_entries)
     body <- c(body,
       sprintf("**%s** — seen %d times, affects `%s`", k, length(grp),
-              grp[[1]]$target_artifact %||% "?"),
+              neutralise_path(grp[[1]]$target_artifact %||% "?")),
       "")
     for (e in grp)
       body <- c(body, sprintf("- %s _(%s, %s)_", e$summary %||% "",
@@ -121,7 +136,8 @@ if (nzchar(propfile)) {
     p <- c(p, "| Lesson | Times seen | Target artifact |", "|---|---|---|")
     for (k in qual) {
       grp <- Filter(function(x) identical(x$recurrence_key %||% "", k), open_entries)
-      p <- c(p, sprintf("| `%s` | %d | `%s` |", k, length(grp), grp[[1]]$target_artifact %||% "?"))
+      p <- c(p, sprintf("| `%s` | %d | `%s` |", k, length(grp),
+                        neutralise_path(grp[[1]]$target_artifact %||% "?")))
     }
   }
   p <- c(p, "",

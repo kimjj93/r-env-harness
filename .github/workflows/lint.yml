@@ -197,6 +197,21 @@ jobs:
       - name: Research aggregator tests
         run: Rscript harness/research/test_aggregate.R
 
+      # The scaffold's central claim is that the harness can be lifted out and
+      # pointed at a different domain. tools/extract-template.sh is the only
+      # thing that tests that claim, and nothing ran it -- so the claim rotted
+      # unobserved: two lessons promoted into AGENTS.md had leaked a use case
+      # path into the portable layer, and extraction had been failing for an
+      # unknown length of time. A portability guarantee nobody executes is a
+      # portability guarantee nobody has.
+      - name: The harness must still lift out cleanly
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          rm -rf /tmp/extracted
+          ./tools/extract-template.sh /tmp/extracted
+          echo "Template extraction succeeded; the harness/use case boundary holds."
+
       - name: The generated block must match the log
         run: |
           set -euo pipefail

@@ -287,7 +287,7 @@ Mistakes this repository has made more than once. Recorded automatically from
 `evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
 Read this before you start. These are not hypothetical.
 
-**silent-gate-degradation** — seen 10 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
+**silent-gate-degradation** — seen 12 times, affects `<usecase>/skills/performance-qualification/SKILL.md`
 
 - as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
@@ -299,10 +299,22 @@ Read this before you start. These are not hypothetical.
 - Two steps named archive uploaded nothing, so evidence was discarded exactly when a failure made it worth reading. _(failure, Review of usecase-publish-image.yml after making the repository public)_
 - Merging workflows silently dropped the permissions their jobs relied on _(workflow, chore/simplify-surface)_
 - The research loop could never produce a proposal, and every layer above it reported success _(failure, fix/research-loop-handoff)_
+- An unparseable telemetry line was filtered away without a count or a warning _(failure, fix/liveness-and-boundary)_
+- A renamed workflow kept answering queries with runs frozen on the day it was renamed _(workflow, fix/liveness-and-boundary)_
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 
-**unverified-external-semantics** — seen 5 times, affects `usecases/r-environment/bin/riskmetric_scan.R`
+**metric-field-mismatch** — seen 5 times, affects `AGENTS.md`
+
+- aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
+- scoreboard.R read delta$package_churn; the field is delta$layer3_packages$churn _(failure, pr:22)_
+- The gate key and the metric field were named so they could never meet _(failure, pr:29)_
+- The producer of telemetry never learned which fields the consumer requires _(context, fix/research-loop-handoff)_
+- The fix for the dead research loop introduced the corruption that kept it dead _(failure, fix/liveness-and-boundary)_
+
+  Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
+
+**unverified-external-semantics** — seen 5 times, affects `<usecase>/bin/riskmetric_scan.R`
 
 - The gate direction was inverted against the external tool's actual semantics _(failure, pr:29)_
 - Scores measured the CI runner's incidental library rather than the image _(failure, pr:29)_
@@ -321,19 +333,12 @@ Read this before you start. These are not hypothetical.
 
   Common cause: A detector whose output lands in the tree it inspects has no fixed point unless it compares against what it already reported.
 
-**metric-field-mismatch** — seen 4 times, affects `AGENTS.md`
-
-- aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
-- scoreboard.R read delta$package_churn; the field is delta$layer3_packages$churn _(failure, pr:22)_
-- The gate key and the metric field were named so they could never meet _(failure, pr:29)_
-- The producer of telemetry never learned which fields the consumer requires _(context, fix/research-loop-handoff)_
-
-  Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
-
-**untested-rare-path** — seen 2 times, affects `AGENTS.md`
+**untested-rare-path** — seen 4 times, affects `AGENTS.md`
 
 - Under set -e a helper ending in grep killed the step before its fallback could run _(failure, pr:8)_
 - The promotion PR step would have failed on a label that did not exist _(failure, pr:22)_
+- The only test of the portability guarantee was never executed by anything _(context, fix/liveness-and-boundary)_
+- ai-review had skipped on every run in the repository's history and had never once executed _(context, fix/liveness-and-boundary)_
 
   Common cause: A fallback path that was never exercised, because reaching it required the failure that prevented it running.
 

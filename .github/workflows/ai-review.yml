@@ -27,8 +27,18 @@ jobs:
   review:
     # Only review machine-authored PRs. A human's PR does not need an AI opinion
     # posted on it unasked, and reviewing every PR burns quota on noise.
+    #
+    # The `ai-review` label exists so the capability can be exercised on demand.
+    # Until it was added, this job had skipped on every run in the repository's
+    # history -- it had never once executed, so nothing about it was known to
+    # work. A capability that has never run is a capability you do not have.
+    #
+    # Note for whoever tests this: `pull_request_target` always runs the copy of
+    # this file on the DEFAULT branch, so a change here cannot be proven on the
+    # pull request that makes it. Label a PR after this merges.
     if: >
       github.event.pull_request.user.type == 'Bot' ||
+      contains(github.event.pull_request.labels.*.name, 'ai-review') ||
       contains(github.event.pull_request.labels.*.name, 'agent-racer') ||
       contains(github.event.pull_request.labels.*.name, 'environment-proposal')
     runs-on: ubuntu-latest

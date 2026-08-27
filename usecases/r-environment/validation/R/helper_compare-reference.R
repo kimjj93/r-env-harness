@@ -68,7 +68,7 @@ recorder_collect <- function() {
 #' and BLAS strings as a native x86_64 runner, yet can differ in the last bits
 #' because the emulator makes different FMA and rounding choices. No in-process
 #' fingerprint can detect this. The defence is provenance, not introspection:
-#' fixtures are built by `.github/workflows/build-fixtures.yml` on a CI runner,
+#' fixtures are built by `.github/workflows/usecase-build-fixtures.yml` on a CI runner,
 #' never on a workstation.
 numeric_backend_meta <- function() {
   si <- tryCatch(utils::sessionInfo(), error = function(e) NULL)
