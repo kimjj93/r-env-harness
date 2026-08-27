@@ -1,5 +1,5 @@
 {
-  "current": "e1e21e494c88b969abfe4d5387ac474f21b06fdb",
+  "current": "bfe65729d8c4b9a4aa58cc497efa519ab4bcd59b",
   "images": {
     "031e629250c395c88b224939f3360b49b4c83134": {
       "renv": {
@@ -24,6 +24,17 @@
         "base_digest": "sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c",
         "digest": "sha256:f870f616cfd4d0aea2e7ff7b0a1d15fa80153ea1e9ae3087640cf66c8cdd2dd6",
         "ppm_snapshot": "2025-01-15",
+        "repository": "ghcr.io/kimjj93/r-env-harness/renv",
+        "signed": true
+      }
+    },
+    "bfe65729d8c4b9a4aa58cc497efa519ab4bcd59b": {
+      "renv": {
+        "attestation_note": "",
+        "base_digest": "sha256:df26749182af64d5263bf64149d51a427b476ed28c4e046997143be3f97fdd7c",
+        "digest": "sha256:754e062b922d995d8246fdbe749397cb3e60a97d902a4d8fc22efe06506457f2",
+        "ppm_snapshot": "2025-04-01",
+        "provenance_attested": true,
         "repository": "ghcr.io/kimjj93/r-env-harness/renv",
         "signed": true
       }
