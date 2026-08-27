@@ -109,6 +109,15 @@ jobs:
 
       - name: Collect the row
         if: always()
+        # Declared ABOVE `run:` deliberately. When this block sat below the
+        # script, inserting a new step after this one silently re-parented it
+        # to that step: the python below then raised KeyError on every
+        # candidate and the loop went dead again. A key above the block scalar
+        # cannot be detached by a later insertion.
+        env:
+          CANDIDATE_VALUE: ${{ matrix.value }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -168,12 +177,12 @@ jobs:
       # here -- next to the code that writes it -- is the difference between a
       # loud failure in the job that caused it and silent data loss discovered
       # weeks later in the job that consumes it.
-      - name: The row must be exactly one parseable JSON object on one line
+      - name: The row must be one parseable record carrying what the loop needs
         if: always()
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, sys
+          import json, re, sys
           p = "artifacts/metrics-row.json"
           raw = open(p).read()
           if not raw.endswith("\n"):
@@ -181,16 +190,32 @@ jobs:
           body = raw.rstrip("\n")
           if "\n" in body:
             sys.exit(f"FATAL: {p} spans multiple lines; JSONL requires one record per line.")
-          json.loads(body)
-          print(f"ok: {p} is one parseable JSON object, newline-terminated.")
+          row = json.loads(body)
+          # Shape is not enough. A row that parses perfectly but carries no
+          # candidate_value is unusable: the aggregator cannot write an edit
+          # into a pin file, so it drops the candidate as "not actionable" and
+          # the week reports a quiet no-op. This check previously verified only
+          # that the row was one valid line, and it passed green on four rows
+          # that had lost every field the loop actually consumes.
+          missing = [k for k in ("candidate_value", "status", "timestamp") if not row.get(k)]
+          if missing:
+            sys.exit(
+              f"FATAL: {p} is missing {', '.join(missing)}. The row parses but the "
+              "weekly aggregator cannot act on it, so recording it would look like "
+              "evidence while proving nothing."
+            )
+          if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["timestamp"]):
+            sys.exit(
+              f"FATAL: timestamp {row['timestamp']!r} is not the canonical ...Z form "
+              "the aggregator's window filter reads; the row would be silently "
+              "excluded from every weekly window."
+            )
+          print(f"ok: {p} is one parseable record with candidate_value="
+                f"{row['candidate_value']!r}, status={row['status']!r}.")
           PY
 
           cp -r evidence/delta evidence/qualify artifacts/ 2>/dev/null || true
           cat artifacts/metrics-row.json
-        env:
-          CANDIDATE_VALUE: ${{ matrix.value }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
-          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -242,11 +267,14 @@ jobs:
 
           found=0
           for f in $(find incoming -name 'metrics-row.json' 2>/dev/null); do
-            # Refuse to append anything that is not exactly one JSON object.
-            # A corrupt row is worse than a missing one: it takes the rows
-            # around it down with it and reports nothing.
-            if ! python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$f" 2>/dev/null; then
-              echo "::error::Refusing to append unparseable telemetry row: $f"
+            # Refuse anything the aggregator cannot act on. A corrupt row is
+            # worse than a missing one: it takes the rows around it down with
+            # it. An *incomplete* row is worse still -- it parses, it counts,
+            # it inflates "rows total", and it silently never becomes a
+            # proposal. Both are rejected here, at the last point before the
+            # data becomes permanent.
+            if ! python3 -c "import json,sys; r=json.loads(open(sys.argv[1]).read().strip()); m=[k for k in ('candidate_value','status','timestamp') if not r.get(k)]; sys.exit('missing required field(s): '+', '.join(m) if m else 0)" "$f"; then
+              echo "::error::Refusing to append a telemetry row that is unparseable or unusable: $f"
               exit 1
             fi
             cat "$f" >> evidence/metrics/metrics.jsonl
