@@ -152,7 +152,37 @@ jobs:
           row["status"] = "success" if build == "success" and qualify == "success" else "failed"
           row["build_outcome"], row["qualify_outcome"] = build, qualify
           row["timestamp"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-          json.dump(row, open(p, "w"))
+          # The trailing newline is load-bearing. This file is one record of a
+          # JSONL log that the telemetry job appends with `cat`. Written
+          # without it, this run's rows concatenate onto the previous line and
+          # the whole batch stops being parseable -- which is exactly what
+          # happened the first night this step ran: four good rows, carrying
+          # the first `candidate_value` the loop had ever produced, landed on
+          # a single physical line and were discarded.
+          with open(p, "w") as fh:
+              json.dump(row, fh)
+              fh.write("\n")
+          PY
+
+      # A row that cannot be parsed is a row that does not exist. Checking it
+      # here -- next to the code that writes it -- is the difference between a
+      # loud failure in the job that caused it and silent data loss discovered
+      # weeks later in the job that consumes it.
+      - name: The row must be exactly one parseable JSON object on one line
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys
+          p = "artifacts/metrics-row.json"
+          raw = open(p).read()
+          if not raw.endswith("\n"):
+            sys.exit(f"FATAL: {p} has no trailing newline; appending it would corrupt the log.")
+          body = raw.rstrip("\n")
+          if "\n" in body:
+            sys.exit(f"FATAL: {p} spans multiple lines; JSONL requires one record per line.")
+          json.loads(body)
+          print(f"ok: {p} is one parseable JSON object, newline-terminated.")
           PY
 
           cp -r evidence/delta evidence/qualify artifacts/ 2>/dev/null || true
@@ -202,12 +232,46 @@ jobs:
 
           mkdir -p evidence/metrics
           touch evidence/metrics/metrics.jsonl
+          # If the log's last line is unterminated, the first append below would
+          # glue itself onto it. Normalise before writing rather than trusting
+          # every producer, forever, to remember a trailing newline.
+          if [ -s evidence/metrics/metrics.jsonl ] && [ -n "$(tail -c 1 evidence/metrics/metrics.jsonl)" ]; then
+            echo "::warning::Telemetry log had an unterminated final line; terminating it before append."
+            echo "" >> evidence/metrics/metrics.jsonl
+          fi
+
           found=0
           for f in $(find incoming -name 'metrics-row.json' 2>/dev/null); do
+            # Refuse to append anything that is not exactly one JSON object.
+            # A corrupt row is worse than a missing one: it takes the rows
+            # around it down with it and reports nothing.
+            if ! python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$f" 2>/dev/null; then
+              echo "::error::Refusing to append unparseable telemetry row: $f"
+              exit 1
+            fi
             cat "$f" >> evidence/metrics/metrics.jsonl
+            [ -n "$(tail -c 1 "$f")" ] && echo "" >> evidence/metrics/metrics.jsonl
             found=$((found+1))
           done
           echo "Appended $found metrics row(s)."
+
+          # Every line must still parse after the append. This is the assertion
+          # that would have caught the corruption on the night it happened.
+          python3 - <<'PY'
+          import json, sys
+          bad = []
+          for i, line in enumerate(open("evidence/metrics/metrics.jsonl"), 1):
+              line = line.strip()
+              if not line:
+                  continue
+              try:
+                  json.loads(line)
+              except Exception as e:
+                  bad.append(f"  line {i}: {e}")
+          if bad:
+              sys.exit("FATAL: telemetry log is corrupt after append:\n" + "\n".join(bad))
+          print("Telemetry log verified: every line parses.")
+          PY
 
           rm -rf incoming
           git add -A evidence/metrics/metrics.jsonl README.md

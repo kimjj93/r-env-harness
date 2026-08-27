@@ -74,6 +74,19 @@ run_agg <- function(rows, pol = policy, label = "case") {
   list(exit = code, out = paste(out, collapse = "\n"), rec = rec)
 }
 
+# Same, but for a metrics file built byte-for-byte by the caller -- used by the
+# corruption and round-trip tests, where HOW the file was written is the thing
+# under test and must not be normalised by write_rows().
+run_agg_file <- function(path, pol = policy, label = NULL) {
+  d <- dirname(path)
+  out <- suppressWarnings(system2("Rscript", c(AGG, path, pol, d),
+                                  stdout = TRUE, stderr = TRUE))
+  code <- attr(out, "status"); if (is.null(code)) code <- 0L
+  recf <- file.path(d, "recommendation.json")
+  rec  <- if (file.exists(recf)) jsonlite::fromJSON(recf) else NULL
+  list(exit = code, out = paste(out, collapse = "\n"), rec = rec)
+}
+
 cat("aggregate.R regression tests\n")
 
 # ---------------------------------------------------------------------------
@@ -168,6 +181,87 @@ if (r7$exit != 0) {
 } else {
   bad("missing policy file is fatal",
       "the aggregator ran with no gates and exited 0")
+}
+
+# ---------------------------------------------------------------------------
+# 8. Corruption must be loud. A JSONL log is one record per line; a producer
+#    that omits the trailing newline fuses its record onto the previous one.
+#    Both records are then lost, and under a silent filter the loss is
+#    indistinguishable from a week in which nothing was tried.
+# ---------------------------------------------------------------------------
+concat <- file.path(tmp, "concat.jsonl")
+good   <- jsonlite::toJSON(row("cand-good", iso_z(1)), auto_unbox = TRUE)
+writeLines(paste0(good, good), concat)   # two objects, one line
+r8 <- run_agg_file(concat, pol = policy)
+if (r8$exit != 0 && grepl("unparseable", r8$out, ignore.case = TRUE)) {
+  ok("concatenated JSON objects on one line are fatal, not silently dropped")
+} else {
+  bad("corrupt telemetry is fatal",
+      sprintf("exit=%d; corruption was tolerated: %s", r8$exit, r8$out))
+}
+
+# ---------------------------------------------------------------------------
+# 9. The missing newline itself must be caught, not just its consequences.
+#    This is the condition R's `readLines(warn = FALSE)` was hiding.
+# ---------------------------------------------------------------------------
+noeol <- file.path(tmp, "noeol.jsonl")
+con <- file(noeol, "wb"); writeBin(charToRaw(paste0(good)), con); close(con)
+r9 <- run_agg_file(noeol, pol = policy)
+if (r9$exit != 0 && grepl("newline", r9$out, ignore.case = TRUE)) {
+  ok("an unterminated final line is reported before it can corrupt an append")
+} else {
+  bad("unterminated final line is detected",
+      sprintf("exit=%d; out: %s", r9$exit, r9$out))
+}
+
+# ---------------------------------------------------------------------------
+# 10. LIVENESS / ROUND-TRIP. The tests above all hand the aggregator a file
+#     this script wrote. That proves the reader works; it proves nothing about
+#     the producer. Every failure this loop has had lived in the seam between
+#     the two -- a field the reader required and no writer ever wrote, then a
+#     newline the writer dropped and the reader silently forgave.
+#
+#     So: emit a row exactly the way the nightly workflow's "Collect the row"
+#     step emits it (json.dump + explicit newline), append it exactly the way
+#     the telemetry job appends it (cat), and require that a PROPOSE comes out
+#     the far end. This is the only test that fails if writer and reader drift
+#     apart.
+# ---------------------------------------------------------------------------
+rt <- file.path(tmp, "roundtrip.jsonl")
+unlink(rt)
+py <- Sys.which("python3")
+if (!nzchar(py)) {
+  bad("round-trip", "python3 not available to reproduce the producer")
+} else {
+  for (i in 1:3) {
+    rowfile <- file.path(tmp, sprintf("metrics-row-%d.json", i))
+    payload <- jsonlite::toJSON(row("cand-good", iso_z(i)), auto_unbox = TRUE)
+    writeLines(as.character(payload), file.path(tmp, "payload.json"))
+    # Mirror of the workflow step, including the newline it must write.
+    script <- sprintf(paste0(
+      "import json\n",
+      "row = json.load(open(%s))\n",
+      "with open(%s, 'w') as fh:\n",
+      "    json.dump(row, fh)\n",
+      "    fh.write('\\n')\n"),
+      shQuote(file.path(tmp, "payload.json")), shQuote(rowfile))
+    system2(py, c("-c", shQuote(script)))
+    # Mirror of the telemetry job's append.
+    file.append(rt, rowfile)
+  }
+  n_lines <- length(readLines(rt, warn = FALSE))
+  r10 <- run_agg_file(rt, pol = policy)
+  rec <- r10$rec
+  if (n_lines != 3) {
+    bad("round-trip: producer output is one record per line",
+        sprintf("appended 3 rows but the log has %d line(s)", n_lines))
+  } else if (r10$exit == 0 && !is.null(rec) && identical(rec$recommendation, "PROPOSE")) {
+    ok("round-trip: a row written by the producer survives to a PROPOSE")
+  } else {
+    bad("round-trip: a row written by the producer survives to a PROPOSE",
+        sprintf("exit=%d recommendation=%s", r10$exit,
+                if (is.null(rec)) "<none>" else rec$recommendation))
+  }
 }
 
 unlink(tmp, recursive = TRUE)

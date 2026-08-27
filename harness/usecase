@@ -44,6 +44,23 @@ case "${1:-}" in
   name)
     py "$READ"'print(m["usecase"].get("name", m["usecase"]["id"]))' ;;
 
+  # The workflow that gates a branch in CI. The harness uses this only to
+  # measure how many attempts an agent needed before its branch went green, so
+  # it is optional -- but if it is declared it must name a file that exists.
+  # It is declared here, at the seam, rather than spelled out in a scaffold
+  # workflow: `weekly.yml` named `env-validate.yml` directly, the file was
+  # renamed to `usecase-env-validate.yml`, and the query kept succeeding
+  # against GitHub's retired workflow entity -- returning runs frozen on the
+  # day of the rename while missing every real one since.
+  gate-workflow)
+    py "$READ"'
+w = (m.get("ci") or {}).get("gate_workflow", "")
+if w:
+    import os, sys
+    if not os.path.exists(w):
+        sys.exit(f"harness.yml declares ci.gate_workflow: {w}, which does not exist")
+print(w)' ;;
+
   variants)
     py "$READ"'
 for v in m.get("variants") or []:

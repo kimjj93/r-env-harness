@@ -40,10 +40,47 @@ if (!file.exists(metrics_file)) {
   quit(status = 0)
 }
 
-lines <- readLines(metrics_file, warn = FALSE)
-lines <- lines[nzchar(trimws(lines))]
-rows  <- lapply(lines, function(l) tryCatch(jsonlite::fromJSON(l), error = function(e) NULL))
-rows  <- Filter(Negate(is.null), rows)
+raw_lines <- readLines(metrics_file, warn = FALSE)
+
+# `warn = FALSE` above suppresses R's "incomplete final line" notice. That
+# notice is a real signal -- an unterminated last line means a producer wrote a
+# record without a newline, and the next append will fuse two records into one
+# unparseable line. Detect it explicitly rather than staying quiet about it.
+if (length(raw_lines) > 0) {
+  sz <- file.info(metrics_file)$size
+  if (!is.na(sz) && sz > 0) {
+    con <- file(metrics_file, "rb"); on.exit(close(con), add = TRUE)
+    last_byte <- readBin(con, "raw", n = sz)[sz]
+    if (last_byte != as.raw(10)) {
+      stop(sprintf(paste0(
+        "Telemetry file '%s' does not end with a newline.\n",
+        "  The next appended row will be concatenated onto the last one and both will be lost.\n",
+        "  Fix the producer that wrote the final record, then terminate the line."), metrics_file))
+    }
+  }
+}
+
+lines  <- raw_lines[nzchar(trimws(raw_lines))]
+keep   <- nzchar(trimws(raw_lines))
+lineno <- which(keep)
+parsed <- lapply(lines, function(l) tryCatch(jsonlite::fromJSON(l), error = function(e) NULL))
+
+# A line that does not parse is evidence that was collected, paid for in CI
+# minutes, and then thrown away. Silently filtering it out is how four rows
+# carrying the loop's first-ever candidate_value disappeared without a word.
+# This is fatal on purpose: a failed workflow is louder than a "quiet week"
+# notice, and a quiet week is precisely what corruption imitates.
+bad <- which(vapply(parsed, is.null, logical(1)))
+if (length(bad) > 0) {
+  stop(sprintf(paste0(
+    "Telemetry contains %d unparseable line(s): %s\n",
+    "  These rows are lost evidence, not an empty week.\n",
+    "  Repair the log (usually: one line holding several concatenated JSON objects)\n",
+    "  and fix whatever produced it before trusting this week's recommendation."),
+    length(bad), paste(lineno[bad], collapse = ", ")))
+}
+
+rows <- parsed
 
 if (length(rows) == 0) {
   message("Telemetry file is empty.")

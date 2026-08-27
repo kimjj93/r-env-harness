@@ -87,6 +87,15 @@ scoring:
   - field: cost_seconds
     direction: lower        # and did so faster
 
+# Optional. The workflow that gates a branch in CI. The harness reads this only
+# to measure how many CI attempts an agent needed before its branch went green;
+# nothing depends on it to run. Declared here because a scaffold workflow must
+# not spell out a use case's filename: `weekly.yml` hard-coded `env-validate.yml`,
+# the file was later renamed, and the query went on succeeding against GitHub's
+# retired workflow entity -- reporting runs frozen on the day of the rename.
+ci:
+  gate_workflow: .github/workflows/usecase-env-validate.yml
+
 # Paths the harness owns and the use case must not write to directly.
 # Evidence is written by the capability commands, in the documented schema.
 reserved:
