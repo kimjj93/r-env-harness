@@ -161,6 +161,16 @@ jobs:
           done < <(find .github/workflows -name '*.yml')
           exit $fail
 
+      # A step's environment can be broken by an edit that never touches the
+      # step: an `env:` block written after a `run:` script is re-parented if
+      # someone inserts a step between them. The diff shows nothing wrong,
+      # because the damage is somewhere else in the file.
+      - name: Every step reads only variables that are in its scope
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          ./harness/check_workflow_env
+
       # Language-specific syntax checking belongs to whoever owns the language.
       # This job checks only what every repository has: shell and YAML.
       - name: Shell scripts parse

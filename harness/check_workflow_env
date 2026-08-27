@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Every environment variable a step reads must be in that step's scope.
+
+This exists because of a specific failure. A step declared the variables its
+script needed in an `env:` block written *after* its `run:` script. A later
+edit inserted a new step between the two, and YAML attached the `env:` block to
+the new step. The original step still looked correct in isolation -- nothing
+about it had been edited -- but every one of its runs then died on KeyError,
+and the job downstream consumed the half-written output anyway.
+
+The lesson generalises past that one bug: a step's environment can be changed
+by an edit that never touches the step. Reviewing the diff will not show it,
+because the diff is somewhere else. So it is checked mechanically, here.
+
+Scope is a step's own `env:`, plus its job's, plus the workflow's, plus the
+variables GitHub injects, plus any assigned inline as `VAR=value cmd`.
+"""
+import glob
+import os
+import re
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.exit("check_workflow_env requires pyyaml (python3 -m pip install pyyaml)")
+
+# Injected by the runner into every step, so never declared in a workflow.
+PROVIDED = re.compile(r"^(GITHUB_|RUNNER_|ACTIONS_|INPUT_)")
+ALWAYS = {"CI", "HOME", "PATH", "PWD", "USER", "SHELL", "LANG", "TMPDIR"}
+
+# `os.environ["X"]` is a hard read; `os.getenv("X")` with no default is a soft
+# one that yields None and corrupts quietly instead of raising. Both are bugs
+# when the variable is out of scope, and the soft one is the worse of the two.
+READS = re.compile(r"""os\.environ\[\s*['"]([A-Z_][A-Z0-9_]*)['"]\s*\]"""
+                   r"""|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]\s*\)""")
+INLINE = re.compile(r"(?m)^\s*(?:[A-Z_][A-Z0-9_]*=\S*\s+)*([A-Z_][A-Z0-9_]*)=\S*\s+\S")
+
+
+def scope_of(step, job, wf):
+    names = set()
+    for level in (wf, job, step):
+        env = level.get("env") if isinstance(level, dict) else None
+        if isinstance(env, dict):
+            names |= set(env)
+    return names
+
+
+def main(root=".github/workflows"):
+    problems = []
+    checked = 0
+    for path in sorted(glob.glob(os.path.join(root, "*.yml"))):
+        try:
+            wf = yaml.safe_load(open(path))
+        except Exception as exc:  # a workflow that cannot parse is a separate gate's job
+            problems.append(f"{path}: does not parse: {exc}")
+            continue
+        if not isinstance(wf, dict):
+            continue
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                script = step.get("run")
+                if not isinstance(script, str):
+                    continue
+                checked += 1
+                used = {a or b for a, b in READS.findall(script)}
+                if not used:
+                    continue
+                declared = scope_of(step, job, wf) | ALWAYS | set(INLINE.findall(script))
+                missing = sorted(
+                    n for n in used
+                    if n not in declared and not PROVIDED.match(n)
+                )
+                if missing:
+                    problems.append(
+                        f"{path} [{job_name}] {step.get('name', '<unnamed step>')}\n"
+                        f"    reads {', '.join(missing)} but nothing in scope declares it.\n"
+                        f"    If this step has an `env:` block, check it is still attached to "
+                        f"this step and has not been re-parented by a neighbouring edit."
+                    )
+    if problems:
+        print("Steps reading variables that are not in scope:\n")
+        for p in problems:
+            print(f"  - {p}")
+        print(f"\n{len(problems)} step(s) would fail at runtime, not at review time.")
+        return 1
+    print(f"Workflow env scope OK: {checked} run step(s) checked.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(*sys.argv[1:]))
