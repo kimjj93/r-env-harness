@@ -53,17 +53,44 @@ if (length(rows) == 0) {
   quit(status = 0)
 }
 
+# Producers do not agree on a timestamp format. The workflow writes
+# `2026-08-26T03:48:10Z`; the use case writes `2026-08-26T03:44:00.950399+00:00`
+# via Python's isoformat(). Parsing only the first silently discarded two thirds
+# of the telemetry -- and because an unparseable timestamp is indistinguishable
+# from an old one under a window filter, the rows vanished without a trace and
+# the loop reported a healthy "no candidate cleared the gates" every week.
+#
+# Accept both, and count what we cannot read. A row we fail to parse is a defect
+# in the producer, never something to drop quietly.
+parse_ts <- function(x) {
+  if (is.null(x) || length(x) == 0 || is.na(x[1]) || !nzchar(as.character(x[1]))) return(NA)
+  s <- as.character(x[1])
+  # Drop fractional seconds, then normalise a trailing offset to a bare UTC
+  # stamp. Both producers emit UTC; if that ever stops being true this must
+  # start honouring the offset rather than assuming it.
+  s <- sub("\\.[0-9]+", "", s)
+  s <- sub("([+-][0-9]{2}):?([0-9]{2})$", "", s)
+  s <- sub("Z$", "", s)
+  suppressWarnings(as.POSIXct(s, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC"))
+}
+
 # Only consider the last 7 days. Older evidence describes an environment that
 # may no longer be the incumbent.
-now    <- Sys.time()
-in_win <- vapply(rows, function(r) {
-  ts <- tryCatch(as.POSIXct(r$timestamp %||% NA, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
-                 error = function(e) NA)
-  !is.na(ts) && difftime(now, ts, units = "days") <= 7
+now      <- Sys.time()
+parsed   <- lapply(rows, function(r) parse_ts(r$timestamp %||% NA))
+unparsed <- sum(vapply(parsed, function(p) is.na(p), logical(1)))
+in_win   <- vapply(seq_along(rows), function(i) {
+  p <- parsed[[i]]
+  !is.na(p) && difftime(now, p, units = "days") <= 7
 }, logical(1))
 week <- rows[in_win]
 
 message("Telemetry rows total: ", length(rows), " | within 7d: ", length(week))
+if (unparsed > 0) {
+  message("UNREADABLE TIMESTAMPS: ", unparsed, " of ", length(rows),
+          " row(s) could not be parsed and were excluded from the window.")
+  message("These are lost evidence, not old evidence. Fix the producer.")
+}
 
 if (length(week) == 0) {
   jsonlite::write_json(list(recommendation = "NONE",
@@ -85,7 +112,23 @@ forbidden       <- c("FAIL_DEVIATION", "FAIL_NONDETERMINISM")
 # which is what lets a different domain add its own gate without touching this.
 extra_gates <- list()
 declared_gate_keys <- character(0)
-if (file.exists(cand_file)) {
+# A policy file we cannot read is not "no policy", it is an unknown policy. The
+# previous version skipped the whole block when the file was missing and carried
+# on with the built-in defaults, so a wrong path did not fail the run -- it
+# quietly removed every threshold the use case had declared and still reported
+# success. Refusing to run is the only safe reading of a missing policy.
+if (!nzchar(cand_file)) {
+  stop("Could not resolve a candidate policy file. `harness/usecase root` did ",
+       "not return a path. Refusing to evaluate candidates with no policy: ",
+       "unknown gates are not the same as no gates.")
+}
+if (!file.exists(cand_file)) {
+  stop("Candidate policy file not found: ", cand_file, "\n",
+       "Refusing to evaluate candidates with no policy. Every declared ",
+       "threshold would be silently absent and the run would still report ",
+       "success.")
+}
+{
   y <- readLines(cand_file, warn = FALSE)
   m <- grep("^\\s*checks_failed_max:", y, value = TRUE)
   if (length(m)) gate_checks_max <- as.numeric(sub(".*:\\s*", "", m[1]))

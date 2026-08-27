@@ -287,7 +287,7 @@ Mistakes this repository has made more than once. Recorded automatically from
 `evidence/learnings.jsonl`; a lesson appears here after it has been observed 2 times or more.
 Read this before you start. These are not hypothetical.
 
-**silent-gate-degradation** — seen 9 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
+**silent-gate-degradation** — seen 10 times, affects `usecases/r-environment/skills/performance-qualification/SKILL.md`
 
 - as.list(env) dropped dot-prefixed names, silently downgrading strict comparison to tolerant _(failure, pr:4)_
 - ai-review appeared to be skipping when it had never been triggered _(failure, pr:15)_
@@ -298,6 +298,7 @@ Read this before you start. These are not hypothetical.
 - continue-on-error on the PQ run meant a published image could fail its own qualification while the workflow reported success. _(failure, Review of usecase-publish-image.yml line 110)_
 - Two steps named archive uploaded nothing, so evidence was discarded exactly when a failure made it worth reading. _(failure, Review of usecase-publish-image.yml after making the repository public)_
 - Merging workflows silently dropped the permissions their jobs relied on _(workflow, chore/simplify-surface)_
+- The research loop could never produce a proposal, and every layer above it reported success _(failure, fix/research-loop-handoff)_
 
   Common cause: A gate that cannot find its own inputs degraded to a weaker mode instead of failing.
 
@@ -311,19 +312,21 @@ Read this before you start. These are not hypothetical.
 
   Common cause: The meaning and API of a third-party score were assumed from its name rather than measured against known inputs
 
-**detector-reports-its-own-output** — seen 3 times, affects `.github/workflows/weekly.yml`
+**detector-reports-its-own-output** — seen 4 times, affects `.github/workflows/weekly.yml`
 
 - The drift detector triggered on push to main and its own report was merged to main, so it re-detected unfixed drift forever _(failure, pr:27)_
 - The loop guard compared every dash line in the previous report, so a resolution section written by a reviewer would have restarted the loop. _(failure, Re-proposed after PR 28 was closed unmerged)_
 - The self-approval gate excluded itself by filename; renaming the file made it match its own source _(workflow, chore/simplify-surface)_
+- The dead-gate detector was silenced by the same bug it exists to catch _(workflow, fix/research-loop-handoff)_
 
   Common cause: A detector whose output lands in the tree it inspects has no fixed point unless it compares against what it already reported.
 
-**metric-field-mismatch** — seen 3 times, affects `AGENTS.md`
+**metric-field-mismatch** — seen 4 times, affects `AGENTS.md`
 
 - aggregate.R read package_churn, a field metrics.R never wrote _(failure, pr:7)_
 - scoreboard.R read delta$package_churn; the field is delta$layer3_packages$churn _(failure, pr:22)_
 - The gate key and the metric field were named so they could never meet _(failure, pr:29)_
+- The producer of telemetry never learned which fields the consumer requires _(context, fix/research-loop-handoff)_
 
   Common cause: Two scripts agreed on a concept but not on a spelling, and the reader treated a missing field as missing data rather than as an error.
 

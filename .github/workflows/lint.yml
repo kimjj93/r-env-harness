@@ -173,7 +173,7 @@ jobs:
           exit $fail
 
   validate:
-    name: Learning log
+    name: Harness self-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +188,14 @@ jobs:
 
       - name: Validate the learning log
         run: Rscript harness/learnings.R validate evidence/learnings.jsonl
+
+      # The aggregator decides whether the research loop can produce anything
+      # at all. It spent its whole life returning "no candidate cleared the
+      # gates" while every surrounding job reported success, because nothing
+      # asserted that a well-formed week SHOULD yield a proposal. These tests
+      # make that assertion, so the flywheel cannot quietly stop turning again.
+      - name: Research aggregator tests
+        run: Rscript harness/research/test_aggregate.R
 
       - name: The generated block must match the log
         run: |
