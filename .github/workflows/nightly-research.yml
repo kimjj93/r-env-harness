@@ -123,8 +123,44 @@ jobs:
               "${{ matrix.variant }}" "${{ matrix.dimension }}" \
               "${{ steps.build.outcome }}" > artifacts/metrics-row.json
           fi
+
+          # Stamp the row with the three facts only this job knows, and which
+          # the weekly aggregator requires to turn a row into a proposal:
+          #
+          #   candidate_value  what was actually tested. Without it the
+          #                    aggregator cannot write an edit into a pin file,
+          #                    so it correctly refuses the candidate as "not
+          #                    actionable" -- which is how every candidate was
+          #                    silently rejected for the entire life of the loop.
+          #   status           whether this experiment is usable evidence.
+          #   timestamp        one canonical format. The use case writes
+          #                    isoformat() with microseconds and an offset; the
+          #                    aggregator's window filter reads a bare `...Z`.
+          #
+          # The use case is not asked to supply these: it does not know which
+          # candidate the harness chose, and a domain should not have to learn
+          # the harness's schema to be scheduled by it.
+          python3 - <<'PY'
+          import json, os, datetime
+          p = "artifacts/metrics-row.json"
+          row = json.load(open(p))
+          row["candidate_value"] = os.environ["CANDIDATE_VALUE"]
+          build, qualify = os.environ["BUILD_OUTCOME"], os.environ["QUALIFY_OUTCOME"]
+          # Only a candidate that built AND qualified is evidence about the
+          # environment. Anything else is evidence about the candidate, which is
+          # still worth recording but must never be proposable.
+          row["status"] = "success" if build == "success" and qualify == "success" else "failed"
+          row["build_outcome"], row["qualify_outcome"] = build, qualify
+          row["timestamp"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          json.dump(row, open(p, "w"))
+          PY
+
           cp -r evidence/delta evidence/qualify artifacts/ 2>/dev/null || true
           cat artifacts/metrics-row.json
+        env:
+          CANDIDATE_VALUE: ${{ matrix.value }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
 
       - uses: actions/upload-artifact@v4
         if: always()

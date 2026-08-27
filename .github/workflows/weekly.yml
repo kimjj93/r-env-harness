@@ -279,6 +279,13 @@ jobs:
       - name: Install aggregation dependencies
         run: Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
 
+      # `harness/usecase` is how the harness resolves the use case's policy file
+      # without naming it. It parses harness.yml, so it needs a YAML reader. This
+      # was missing while the aggregator was being passed an explicit (wrong)
+      # path, so nothing ever invoked the resolver and the gap stayed invisible.
+      - name: Install use case resolver dependencies
+        run: python3 -m pip install --quiet pyyaml
+
       - name: Collect the week's telemetry
         run: |
           set -euo pipefail
@@ -294,7 +301,19 @@ jobs:
           echo "rows: $(wc -l < artifacts/metrics.jsonl)"
 
       - name: Aggregate and select a candidate
-        run: Rscript harness/research/aggregate.R artifacts/metrics.jsonl harness/research/candidates.yml artifacts
+        # The policy file is NOT named here. `harness/research/candidates.yml`
+        # was passed for months and has never existed -- the argument silently
+        # overrode aggregate.R's correct default, which resolves the file
+        # through `harness/usecase root`. Two things followed: every
+        # use-case-declared threshold went unapplied, and the dead-gate report
+        # went quiet, because a policy file that loads no gates has no gates to
+        # report as dead. The alarm for this exact failure was disabled by the
+        # failure it exists to catch.
+        #
+        # Letting the default resolve is also the only version that stays
+        # correct when the use case is swapped: the harness must not know the
+        # domain's filename.
+        run: Rscript harness/research/aggregate.R artifacts/metrics.jsonl
 
       - name: Decide
         id: decide
